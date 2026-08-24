@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Move My Ass</title>
+<link rel="icon" href="/static/logo.png?v=glitch3">
+<link rel="stylesheet" href="/static/style.css?v=slice3">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img class="logo" src="/static/logo.png?v=glitch3" width="168" height="56" alt="Move My Ass">
+  </div>
+  <div class="conn" id="conn">
+    <span class="dot" id="conn-dot"></span>
+    <span id="conn-text">checking…</span>
+  </div>
+  <div class="topbar-actions">
+    <button id="btn-refresh-library" class="ghost" title="Make Move rescan its library so new files appear on the device">Refresh device library</button>
+    <button id="btn-settings" class="ghost">Connection</button>
+  </div>
+</header>
+
+<dialog id="settings">
+  <form method="dialog" id="settings-form">
+    <h2>Connection</h2>
+    <label>Mode
+      <select name="backend" id="f-backend">
+        <option value="mock">Mock folder (no device needed)</option>
+        <option value="sftp">Real Move over SFTP</option>
+      </select>
+    </label>
+    <label>Host <input name="host" id="f-host" placeholder="move.local"></label>
+    <label>User <input name="user" id="f-user" placeholder="ableton"></label>
+    <label>SSH key <input name="key_path" id="f-key" placeholder="~/.ssh/id_ed25519 (blank = agent / defaults)"></label>
+    <p class="hint" id="settings-hint"></p>
+    <menu>
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="connect" id="btn-connect" class="primary">Connect</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="ask">
+  <form method="dialog" id="ask-form">
+    <h2 id="ask-title">New folder</h2>
+    <label><span id="ask-label">Name</span>
+      <input id="ask-input" autocomplete="off" spellcheck="false">
+    </label>
+    <p class="hint" id="ask-hint"></p>
+    <menu>
+      <button type="button" id="ask-cancel" class="ghost">Cancel</button>
+      <button value="ok" id="ask-ok" class="primary">OK</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="color-picker">
+  <h2 id="color-title">Pad color</h2>
+  <div class="color-grid" id="color-grid"></div>
+  <p class="hint">This is the LED colour on the 32-pad grid.</p>
+  <menu>
+    <button type="button" id="color-cancel" class="ghost">Cancel</button>
+  </menu>
+</dialog>
+
+<nav class="tabs" id="tabs">
+  {% for section in sections %}
+  <button class="tab" data-kind="{{ section }}">{{ section_labels.get(section, section) }}</button>
+  {% endfor %}
+</nav>
+
+<main>
+  <div class="toolbar">
+    <div class="toolbar-select">
+      <button id="btn-download" disabled>Download</button>
+      <button id="btn-copy" hidden disabled>Copy to Samples</button>
+      <button id="btn-rename" disabled>Rename</button>
+      <button id="btn-color" hidden disabled>Color</button>
+      <button id="btn-delete" class="danger" disabled>Delete</button>
+    </div>
+    <nav class="crumbs" id="crumbs"></nav>
+    <div class="spacer"></div>
+    <span class="selcount" id="selcount"></span>
+    <button id="btn-upload" class="primary">Upload files</button>
+    <button id="btn-upload-folder" class="ghost">Upload folder</button>
+    <button id="btn-mkdir" class="ghost">New folder</button>
+    <div class="toolbar-kit" id="toolbar-kit">
+      <button id="btn-kit">Build kit from folder</button>
+      <button id="btn-slice" disabled>Slice into kit</button>
+    </div>
+  </div>
+
+  <input type="file" id="file-input" multiple hidden>
+  <input type="file" id="folder-input" webkitdirectory multiple hidden>
+
+  <div id="drop" class="dropzone">
+    <table class="listing">
+      <thead>
+        <tr>
+          <th class="c-check"><input type="checkbox" id="check-all"></th>
+          <th class="c-name">Name</th>
+          <th class="c-size">Size</th>
+          <th class="c-date">Modified</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden></div>
+    <div class="drop-overlay"><span>Drop to upload here</span></div>
+  </div>
+</main>
+
+<dialog id="kit">
+  <h2 id="kit-title">Build kit</h2>
+  <div class="kit-meta">
+    <label>Kit name <input id="kit-name" placeholder="My Kit"></label>
+    <label>Type
+      <select id="kit-type">
+        <option value="drum">Drum — one shot, pads ring out</option>
+        <option value="choke">Choke — pads cut each other off</option>
+        <option value="gate">Gate — sustains while held</option>
+      </select>
+    </label>
+    <label>Return FX
+      <select id="kit-return-fx">
+        <option value="">Off</option>
+        <option value="reverb" selected>Reverb</option>
+        <option value="saturator">Saturator</option>
+        <option value="delay">Delay</option>
+        <option value="chorus">Chorus-Ensemble</option>
+        <option value="phaser">Phaser-Flanger</option>
+        <option value="channelEq">Channel EQ</option>
+        <option value="compressor">Compressor</option>
+        <option value="limiter">Limiter</option>
+        <option value="redux2">Redux</option>
+      </select>
+    </label>
+    <label>Insert FX
+      <select id="kit-insert-fx">
+        <option value="">Off</option>
+        <option value="reverb">Reverb</option>
+        <option value="saturator" selected>Saturator</option>
+        <option value="delay">Delay</option>
+        <option value="chorus">Chorus-Ensemble</option>
+        <option value="phaser">Phaser-Flanger</option>
+        <option value="channelEq">Channel EQ</option>
+        <option value="compressor">Compressor</option>
+        <option value="limiter">Limiter</option>
+        <option value="redux2">Redux</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="kit-slice-controls" hidden>
+    <label>Slices <span id="slice-count-label">16</span>
+      <input type="range" id="kit-slices" min="2" max="16" value="16">
+    </label>
+    <p class="hint" id="kit-slice-info"></p>
+    <div class="kit-overview" id="kit-overview" hidden>
+      <canvas></canvas>
+    </div>
+  </div>
+
+  <div class="padgrid" id="padgrid"></div>
+  <p class="hint" id="kit-hint"></p>
+
+  <menu>
+    <button id="kit-cancel" class="ghost">Cancel</button>
+    <button id="kit-download" class="ghost">Download bundle</button>
+    <button id="kit-save" class="primary">Save to Move</button>
+  </menu>
+</dialog>
+
+<footer class="statusbar">
+  <span id="status">Ready</span>
+  <span class="spacer"></span>
+  <span id="pathinfo"></span>
+</footer>
+
+<div id="toasts"></div>
+<script src="/static/app.js?v=slice3"></script>
+</body>
+</html>
