@@ -8,6 +8,32 @@ It runs as a small web app **on your PC** and talks to the Move over SFTP. Nothi
 is installed on the device and no firmware is modified — we only read and write
 files in your own user library.
 
+## Where copies live
+
+- **Working copy:** `D:\Programming\Move Manager` (the folder Cursor uses)
+- **Desktop copy:** `%USERPROFILE%\Desktop\Move My Ass` — source only, no `.venv`
+  and no mock device files. To run it from the Desktop:
+
+```powershell
+cd "$env:USERPROFILE\Desktop\Move My Ass"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe scripts\make_mock.py
+.\run.ps1 -Mock
+```
+
+- **GitHub:** create a new repository named **Move-My-Ass** (empty, no README),
+  then from the working copy:
+
+```powershell
+cd "D:\Programming\Move Manager"
+git remote add origin https://github.com/<your-username>/Move-My-Ass.git
+git push -u origin main
+```
+
+Replace `<your-username>` with your GitHub account. SSH keys, `.venv`, and
+`mock-move/` are not included.
+
 ## Status
 
 Working now:
