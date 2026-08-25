@@ -15,31 +15,145 @@
   const GRID = "rgba(244, 234, 240, 0.08)";
   const FILL = "rgba(0, 229, 255, 0.18)";
 
-  const PRIMARY = {
-    reverb: ["FreezeOn", "DecayTime", "PreDelay", "RoomSize", "MixDirect", "MixReflect", "MixDiffuse", "StereoSeparation", "ChorusOn", "SpinOn"],
-    delay: ["DryWet", "Feedback", "Freeze", "DelayLine_PingPong", "DelayLine_Link", "DelayLine_SyncL", "DelayLine_SyncR", "DelayLine_SyncedSixteenthL", "DelayLine_SyncedSixteenthR", "DelayLine_TimeL", "DelayLine_TimeR", "Filter_On", "Filter_Frequency", "Filter_Bandwidth"],
-    chorus: ["Mode", "DryWet", "Amount", "Rate", "Feedback", "Width", "Warmth", "HighpassEnabled", "HighpassFrequency"],
-    phaser: ["Mode", "DryWet", "CenterFrequency", "Feedback", "Notches", "Spread", "Modulation_Amount", "Modulation_Waveform", "Modulation_Frequency", "FlangerDelayTime", "DoublerDelayTime"],
-    saturator: ["Type", "DryWet", "PreDrive", "PostDrive", "PostClip", "ColorOn", "ColorFrequency", "ColorWidth", "ColorDepth", "BassShaperThreshold"],
-    channelEq: ["HighpassOn", "LowShelfGain", "MidGain", "MidFrequency", "HighShelfGain", "Gain"],
-    compressor: ["Model", "Threshold", "Ratio", "Attack", "Release", "Knee", "Gain", "DryWet", "GainCompensation", "AutoReleaseControlOnOff"],
-    limiter: ["Ceiling", "Gain", "Release", "AutoRelease", "Lookahead", "Maximize", "LinkAmount"],
-    redux2: ["DryWet", "BitDepth", "SampleRate", "Jitter", "EnablePreFilter", "EnablePostFilter", "PostFilterValue", "QuantizerShape"],
-    autoFilter: ["DryWet", "Filter_Type", "Filter_Frequency", "Filter_Resonance", "Filter_Drive", "Filter_Slope", "Filter_Circuit", "Lfo_Amount", "Lfo_Frequency", "Lfo_Waveform", "Envelope_Amount", "Envelope_Attack", "Envelope_Release"],
-    autoPan: ["Mode", "Modulation_Amount", "Modulation_Frequency", "Modulation_Phase", "Modulation_Waveform", "Modulation_TimeMode", "Modulation_SyncedRate", "VintageMode", "AttackTime", "DynamicFrequencyModulation"],
-    autoShift: ["Global_DryWet", "PitchShift_ShiftSemitones", "PitchShift_Detune", "PitchShift_FormantShift", "Quantizer_Amount", "Quantizer_Active", "Lfo_Enabled", "Lfo_RateHz", "Modulation_LfoToPitchModAmount", "Vibrato_Amount"],
-    erosion: ["Amount", "Frequency", "FilterWidth", "NoiseBlend", "StereoWidth"],
-    drift: ["Filter_Frequency", "Filter_Resonance", "Envelope1_Attack", "Envelope1_Decay", "Envelope1_Sustain", "Envelope1_Release", "Oscillator1_Shape", "Lfo_Amount"],
-    wavetable: ["Voice_Filter1_Frequency", "Voice_Filter1_Resonance", "Voice_Modulators_AmpEnvelope_Times_Attack", "Voice_Modulators_AmpEnvelope_Times_Decay", "Voice_Modulators_AmpEnvelope_Sustain", "Voice_Modulators_AmpEnvelope_Times_Release", "Voice_Oscillator1_Wavetables_WavePosition", "Volume"],
-    melodicSampler: ["Voice_Filter_Frequency", "Voice_Filter_Resonance", "Voice_AmplitudeEnvelope_Attack", "Voice_AmplitudeEnvelope_Decay", "Voice_AmplitudeEnvelope_Sustain", "Voice_AmplitudeEnvelope_Release", "Voice_Transpose", "Volume"],
-    drumRack: ["Volume", "Voice_Filter_Frequency", "Voice_Envelope_Decay", "Voice_Gain", "Voice_Transpose"],
-  };
-
   const FILTER_PARAMS = {
     drift: { freq: "Filter_Frequency", res: "Filter_Resonance", type: "Filter_Type" },
     wavetable: { freq: "Voice_Filter1_Frequency", res: "Voice_Filter1_Resonance", type: "Voice_Filter1_Type", enable: "Voice_Filter1_On" },
     melodicSampler: { freq: "Voice_Filter_Frequency", res: "Voice_Filter_Resonance", enable: "Voice_Filter_On", resMax: 90 },
     drumRack: { freq: "Voice_Filter_Frequency", res: "Voice_Filter_Resonance", enable: "Voice_Filter_On" },
+  };
+
+  /* Live Device View: named panels + the plot that belongs with each one. */
+  const SECTIONS = {
+    drift: [
+      { id: "osc1", name: "Oscillator 1", viz: "osc", caption: "Osc mix — drag shape and shape mod", params: ["Oscillator1_Type", "Oscillator1_Shape", "Oscillator1_ShapeMod", "Oscillator1_Transpose"] },
+      { id: "osc2", name: "Oscillator 2", viz: null, params: ["Oscillator2_Type", "Oscillator2_Detune", "Oscillator2_Transpose"] },
+      { id: "mixer", name: "Mixer", viz: null, params: ["Mixer_OscillatorOn1", "Mixer_OscillatorOn2", "Mixer_OscillatorGain1", "Mixer_OscillatorGain2", "Mixer_NoiseOn", "Mixer_NoiseLevel"] },
+      { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", span: 2, params: ["Filter_Type", "Filter_Frequency", "Filter_Resonance", "Filter_HiPassFrequency", "Filter_ModAmount1", "Filter_ModAmount2"] },
+      { id: "env1", name: "Env 1 · Amp", viz: "adsr", map: "driftEnv1", caption: "Amp envelope — drag the stages", params: ["Envelope1_Attack", "Envelope1_Decay", "Envelope1_Sustain", "Envelope1_Release"] },
+      { id: "env2", name: "Env 2 · Mod", viz: "adsr", map: "driftEnv2", caption: "Mod envelope — drag the stages", params: ["Envelope2_Attack", "Envelope2_Decay", "Envelope2_Sustain", "Envelope2_Release"] },
+      { id: "lfo", name: "LFO", viz: "lfo", map: "driftLfo", caption: "LFO — drag rate and amount", params: ["Lfo_Amount", "Lfo_Rate", "Lfo_Time", "Lfo_Retrigger", "PitchModulation_Amount1", "PitchModulation_Amount2"] },
+      { id: "global", name: "Global", viz: null, params: ["Global_Volume", "Global_Glide", "Global_Transpose", "Global_DriftDepth", "Global_UnisonVoiceDepth"] },
+    ],
+    wavetable: [
+      { id: "osc1", name: "Oscillator 1", viz: "wt", map: "wtOsc1", caption: "Wavetable — drag position and level", params: ["Voice_Oscillator1_On", "Voice_Oscillator1_Gain", "Voice_Oscillator1_Wavetables_WavePosition", "Voice_Oscillator1_Pitch_Transpose", "Voice_Oscillator1_Pitch_Detune"] },
+      { id: "osc2", name: "Oscillator 2", viz: "wt", map: "wtOsc2", caption: "Wavetable 2 — drag position and level", params: ["Voice_Oscillator2_On", "Voice_Oscillator2_Gain", "Voice_Oscillator2_Wavetables_WavePosition", "Voice_Oscillator2_Pitch_Transpose"] },
+      { id: "sub", name: "Sub", viz: null, params: ["Voice_SubOscillator_On", "Voice_SubOscillator_Gain"] },
+      { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", span: 2, params: ["Voice_Filter1_On", "Voice_Filter1_Type", "Voice_Filter1_Frequency", "Voice_Filter1_Resonance", "Voice_Filter1_Drive"] },
+      { id: "env", name: "Amp envelope", viz: "adsr", map: "wavetableAmp", caption: "Amp envelope — drag the stages", params: ["Voice_Modulators_AmpEnvelope_Times_Attack", "Voice_Modulators_AmpEnvelope_Times_Decay", "Voice_Modulators_AmpEnvelope_Sustain", "Voice_Modulators_AmpEnvelope_Times_Release"] },
+      { id: "lfo", name: "LFO 1", viz: "lfo", map: "wavetableLfo", caption: "LFO — drag rate and amount", params: ["Voice_Modulators_Lfo1_Time_Rate", "Voice_Modulators_Lfo1_Shape_Amount"] },
+      { id: "global", name: "Global", viz: null, params: ["Volume", "Voice_Unison_Amount", "Voice_Global_Glide", "Voice_Global_Transpose"] },
+    ],
+    melodicSampler: [
+      { id: "sample", name: "Sample", viz: "sample", caption: "Start and length — drag the region", span: 2, params: ["Voice_Gain", "Voice_PlaybackStart", "Voice_PlaybackLength", "Voice_Transpose", "Voice_Detune", "Voice_VelocityToVolume"] },
+      { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", params: ["Voice_Filter_On", "Voice_Filter_Frequency", "Voice_Filter_Resonance"] },
+      { id: "env", name: "Amp envelope", viz: "adsr", map: "samplerAmp", caption: "Amp envelope — drag the stages", params: ["Voice_AmplitudeEnvelope_Attack", "Voice_AmplitudeEnvelope_Decay", "Voice_AmplitudeEnvelope_Sustain", "Voice_AmplitudeEnvelope_Release"] },
+      { id: "fenv", name: "Filter envelope", viz: "adsr", map: "samplerFilter", caption: "Filter envelope — drag the stages", params: ["Voice_FilterEnvelope_On", "Voice_FilterEnvelope_Attack", "Voice_FilterEnvelope_Decay", "Voice_FilterEnvelope_Sustain", "Voice_FilterEnvelope_Release"] },
+      { id: "lfo", name: "LFO", viz: "lfo", map: "samplerLfo", caption: "LFO — drag rate", params: ["Voice_Lfo_On", "Voice_Lfo_Rate"] },
+      { id: "global", name: "Global", viz: null, params: ["Volume"] },
+    ],
+    drumRack: [
+      { id: "env", name: "Envelope", viz: "ahd", map: "drumAhd", caption: "AHD — drag attack, hold, decay", params: ["Voice_Envelope_Attack", "Voice_Envelope_Hold", "Voice_Envelope_Decay", "Volume", "Voice_Gain", "Voice_Transpose"] },
+      { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", params: ["Voice_Filter_On", "Voice_Filter_Frequency", "Voice_Filter_Resonance"] },
+      { id: "sample", name: "Sample", viz: "sample", caption: "Start and length — drag the region", params: ["Voice_PlaybackStart", "Voice_PlaybackLength", "Voice_VelocityToVolume"] },
+    ],
+    reverb: [
+      { id: "display", name: "Reverb", viz: "device", interactive: false, caption: "Early reflections + decay", span: 2, params: ["FreezeOn", "DecayTime", "PreDelay", "RoomSize"] },
+      { id: "mix", name: "Mix", viz: null, params: ["MixDirect", "MixReflect", "MixDiffuse", "DiffuseDelay", "StereoSeparation"] },
+      { id: "character", name: "Character", viz: null, params: ["ChorusOn", "SpinOn", "CutOn", "FlatOn"] },
+      { id: "eq", name: "EQ", viz: "reverbEq", caption: "Reverb EQ — drag the shelves", span: 2, params: ["ShelfLowOn", "ShelfLoFreq", "ShelfLoGain", "ShelfHighOn", "ShelfHiFreq", "ShelfHiGain", "BandLowOn", "BandHighOn", "BandFreq", "BandWidth"] },
+      { id: "mod", name: "Modulation", viz: null, params: ["AllPassGain", "AllPassSize", "EarlyReflectModDepth", "EarlyReflectModFreq", "SizeModDepth", "SizeModFreq"] },
+    ],
+    delay: [
+      { id: "mix", name: "Delay", viz: "taps", interactive: false, caption: "Delay taps", span: 2, params: ["DryWet", "Feedback", "Freeze", "DelayLine_PingPong", "DryWetMode"] },
+      { id: "time", name: "Time", viz: null, params: ["DelayLine_Link", "DelayLine_SyncL", "DelayLine_SyncR", "DelayLine_SyncedSixteenthL", "DelayLine_SyncedSixteenthR", "DelayLine_TimeL", "DelayLine_TimeR", "DelayLine_SimpleDelayTimeL", "DelayLine_SimpleDelayTimeR", "DelayLine_OffsetL", "DelayLine_OffsetR", "DelayLine_PingPongDelayTimeL", "DelayLine_PingPongDelayTimeR"] },
+      { id: "filter", name: "Filter", viz: "delayFilter", caption: "Filter — drag frequency and width", params: ["Filter_On", "Filter_Frequency", "Filter_Bandwidth"] },
+      { id: "mod", name: "Modulation", viz: null, params: ["Modulation_AmountTime", "Modulation_AmountFilter", "Modulation_Frequency", "DelayLine_SmoothingMode", "EcoProcessing"] },
+    ],
+    autoFilter: [
+      { id: "filter", name: "Filter", viz: "device", caption: "Filter — drag cutoff and resonance", span: 2, params: ["DryWet", "Output", "Filter_Type", "Filter_Frequency", "Filter_Resonance", "Filter_Drive", "Filter_Slope", "Filter_Circuit", "Filter_Morph", "Filter_MorphSlope", "Filter_DjControl", "Filter_VowelFormant", "Filter_VowelPitch"] },
+      { id: "lfo", name: "LFO", viz: "lfo", map: "autoFilterLfo", caption: "LFO — drag rate and amount", params: ["Lfo_Amount", "Lfo_Frequency", "Lfo_Waveform", "Lfo_TimeMode", "Lfo_SyncedRate", "Lfo_Phase", "Lfo_Morph", "Lfo_Spin"] },
+      { id: "lfo2", name: "LFO shape", viz: null, params: ["Lfo_Sixteenth", "Lfo_Time", "Lfo_PhaseOffset", "Lfo_StereoMode", "Lfo_QuantizationMode", "Lfo_Steps", "Lfo_Smoothing", "Lfo_SahRate"] },
+      { id: "env", name: "Envelope", viz: "ar", map: "autoFilterEnv", caption: "Envelope — drag attack and release", params: ["Envelope_Amount", "Envelope_Attack", "Envelope_Release", "Envelope_HoldOn", "Envelope_SahOn", "Envelope_SahRate"] },
+      { id: "side", name: "Sidechain", viz: null, params: ["SideChainEq_On", "SideChainEq_Mode", "SideChainEq_Freq", "SideChainEq_Gain", "SideChainEq_Q", "SideChainListen", "SideChainMono", "InternalSideChainGain", "SoftClipOn", "HiQuality"] },
+    ],
+    chorus: [
+      { id: "display", name: "Chorus-Ensemble", viz: "device", interactive: false, caption: "Delay-line modulation", span: 2, params: ["Mode", "DryWet", "Amount", "Rate", "Feedback", "Width"] },
+      { id: "tone", name: "Tone", viz: null, params: ["Warmth", "Shaping", "VibratoOffset", "OutputGain", "HighpassEnabled", "HighpassFrequency", "InvertFeedback"] },
+    ],
+    phaser: [
+      { id: "display", name: "Phaser-Flanger", viz: "device", caption: "Notches — drag to set frequency", span: 2, params: ["Mode", "DryWet", "CenterFrequency", "Feedback", "Notches", "Spread"] },
+      { id: "lfo", name: "LFO", viz: "lfo", map: "phaserLfo", caption: "LFO — drag rate and amount", params: ["Modulation_Amount", "Modulation_Waveform", "Modulation_Frequency", "Modulation_Sync", "Modulation_SyncedRate", "Modulation_PhaseOffset", "ModulationBlend", "Modulation_SpinEnabled", "Modulation_Spin"] },
+      { id: "lfo2", name: "LFO 2", viz: null, params: ["Modulation_Frequency2", "Modulation_Sync2", "Modulation_SyncedRate2", "Modulation_LfoBlend", "Modulation_DutyCycle"] },
+      { id: "env", name: "Envelope", viz: "ar", map: "phaserEnv", caption: "Envelope — drag attack and release", params: ["Modulation_EnvelopeEnabled", "Modulation_EnvelopeAmount", "Modulation_EnvelopeAttack", "Modulation_EnvelopeRelease"] },
+      { id: "tone", name: "Tone", viz: null, params: ["Warmth", "OutputGain", "FlangerDelayTime", "DoublerDelayTime", "InvertWet", "SafeBassFrequency"] },
+    ],
+    autoPan: [
+      { id: "display", name: "Auto Pan", viz: "device", caption: "L / R — drag rate and amount", span: 2, params: ["Mode", "Modulation_Amount", "Modulation_Frequency", "Modulation_Phase", "Modulation_Waveform"] },
+      { id: "time", name: "Time · Shape", viz: null, params: ["Modulation_TimeMode", "Modulation_SyncedRate", "Modulation_Sixteenth", "Modulation_Time", "Modulation_Spin", "Modulation_Invert", "Modulation_PhaseOffset", "Modulation_StereoMode", "AttackTime", "DynamicFrequencyModulation", "PanningWaveformShape", "TremoloWaveformShape", "VintageMode", "HarmonicMode"] },
+    ],
+    autoShift: [
+      { id: "pitch", name: "Pitch", viz: "device", caption: "Pitch — drag semitones and formant", span: 2, params: ["Global_DryWet", "PitchShift_ShiftSemitones", "PitchShift_Detune", "PitchShift_FormantShift", "PitchShift_FormantFollow", "PitchShift_ShiftScaleDegrees"] },
+      { id: "quantize", name: "Quantize", viz: null, params: ["Quantizer_Active", "Quantizer_Amount", "Quantizer_InternalScale", "Quantizer_RootNote", "Quantizer_Smooth", "Quantizer_SmoothingTime", "Global_UseScale"] },
+      { id: "lfo", name: "LFO", viz: "lfo", map: "autoShiftLfo", caption: "LFO — drag rate and pitch amount", params: ["Lfo_Enabled", "Lfo_RateHz", "Lfo_SyncOn", "Lfo_SyncedRate", "Lfo_Waveform", "Lfo_OnsetRetrigger", "Lfo_Attack", "Lfo_Delay", "Modulation_LfoToPitchModAmount", "Modulation_LfoToVolumeModAmount", "Modulation_LfoToPanModAmount", "Modulation_LfoToFormantModAmount"] },
+      { id: "vibrato", name: "Vibrato", viz: null, params: ["Vibrato_Amount", "Vibrato_RateHz", "Vibrato_Attack", "Vibrato_Humanization"] },
+      { id: "midi", name: "MIDI", viz: null, params: ["MidiInput_Enabled", "MidiInput_AttackTime", "MidiInput_ReleaseTime", "MidiInput_Glide", "MidiInput_Latch", "MidiInput_MonoPoly", "MidiInput_NumVoices", "MidiInput_PitchBendRange"] },
+      { id: "global", name: "Global", viz: null, params: ["Global_InputGain", "Global_LiveMode", "Global_PitchRange"] },
+    ],
+    erosion: [
+      { id: "display", name: "Erosion", viz: "device", caption: "Noise band — drag frequency and amount", span: 2, params: ["Amount", "Frequency", "FilterWidth", "NoiseBlend", "StereoWidth"] },
+    ],
+    saturator: [
+      { id: "display", name: "Saturator", viz: "device", interactive: false, caption: "Waveshaper curve", span: 2, params: ["Type", "DryWet", "PreDrive", "PostDrive", "PostClip", "BaseDrive"] },
+      { id: "color", name: "Color", viz: "satColor", caption: "Color EQ — drag frequency and depth", params: ["ColorOn", "ColorFrequency", "ColorWidth", "ColorDepth", "BassShaperThreshold"] },
+      { id: "shape", name: "Waveshape", viz: null, params: ["WsCurve", "WsDepth", "WsDrive", "WsLin", "WsPeriod", "WsDamp", "Oversampling", "PreDcFilter"] },
+    ],
+    channelEq: [
+      { id: "display", name: "Channel EQ", viz: "device", caption: "EQ curve — drag the handles", wide: true, params: ["HighpassOn", "LowShelfGain", "MidGain", "MidFrequency", "HighShelfGain", "Gain"] },
+    ],
+    compressor: [
+      { id: "display", name: "Compressor", viz: "device", caption: "Transfer — drag threshold and ratio", span: 2, params: ["Model", "Threshold", "Ratio", "Knee"] },
+      { id: "time", name: "Time · Mix", viz: null, params: ["Attack", "Release", "Gain", "DryWet", "GainCompensation", "AutoReleaseControlOnOff", "LogEnvelope"] },
+      { id: "side", name: "Sidechain", viz: null, params: ["SideChainEq_On", "SideChainEq_Freq", "SideChainEq_Gain", "SideChainEq_Q", "ExpansionRatio"] },
+    ],
+    limiter: [
+      { id: "display", name: "Limiter", viz: "device", caption: "Ceiling — drag to set it", span: 2, params: ["Ceiling", "Gain", "Release", "AutoRelease", "Lookahead", "LinkAmount"] },
+      { id: "max", name: "Maximize", viz: null, params: ["Maximize", "MaximizeOutput", "MaximizeThreshold", "LinkAmountMidSide", "LegacySmoothing"] },
+    ],
+    redux2: [
+      { id: "display", name: "Redux", viz: "device", interactive: false, caption: "Downsample + bit reduction", span: 2, params: ["DryWet", "BitDepth", "SampleRate", "Jitter", "QuantizerShape"] },
+      { id: "filter", name: "Filters", viz: null, params: ["EnablePreFilter", "EnablePostFilter", "PostFilterValue", "QuantizerDcShift", "EcoProcessing"] },
+    ],
+  };
+
+  const ADSR = {
+    driftEnv1: { a: "Envelope1_Attack", d: "Envelope1_Decay", s: "Envelope1_Sustain", r: "Envelope1_Release", aMax: 20, dMax: 20, rMax: 20 },
+    driftEnv2: { a: "Envelope2_Attack", d: "Envelope2_Decay", s: "Envelope2_Sustain", r: "Envelope2_Release", aMax: 20, dMax: 20, rMax: 20 },
+    wavetableAmp: { a: "Voice_Modulators_AmpEnvelope_Times_Attack", d: "Voice_Modulators_AmpEnvelope_Times_Decay", s: "Voice_Modulators_AmpEnvelope_Sustain", r: "Voice_Modulators_AmpEnvelope_Times_Release", aMax: 20, dMax: 20, rMax: 20 },
+    samplerAmp: { a: "Voice_AmplitudeEnvelope_Attack", d: "Voice_AmplitudeEnvelope_Decay", s: "Voice_AmplitudeEnvelope_Sustain", r: "Voice_AmplitudeEnvelope_Release", aMax: 20, dMax: 20, rMax: 60 },
+    samplerFilter: { a: "Voice_FilterEnvelope_Attack", d: "Voice_FilterEnvelope_Decay", s: "Voice_FilterEnvelope_Sustain", r: "Voice_FilterEnvelope_Release", aMax: 20, dMax: 20, rMax: 20 },
+  };
+
+  const AHD = {
+    drumAhd: { a: "Voice_Envelope_Attack", h: "Voice_Envelope_Hold", d: "Voice_Envelope_Decay", aMax: 2, hMax: 2, dMax: 8 },
+  };
+
+  const LFO = {
+    driftLfo: { amount: "Lfo_Amount", rate: "Lfo_Rate", rateMax: 40, amountMax: 1 },
+    wavetableLfo: { amount: "Voice_Modulators_Lfo1_Shape_Amount", rate: "Voice_Modulators_Lfo1_Time_Rate", rateMax: 30, amountMax: 1 },
+    samplerLfo: { amount: "Voice_Lfo_On", rate: "Voice_Lfo_Rate", rateMax: 30, amountMax: 1, enable: "Voice_Lfo_On", amountIsBool: true },
+    autoFilterLfo: { amount: "Lfo_Amount", rate: "Lfo_Frequency", rateMax: 30, amountMax: 1, wave: "Lfo_Waveform" },
+    phaserLfo: { amount: "Modulation_Amount", rate: "Modulation_Frequency", rateMax: 20, amountMax: 1, wave: "Modulation_Waveform" },
+    autoShiftLfo: { amount: "Modulation_LfoToPitchModAmount", rate: "Lfo_RateHz", rateMax: 20, amountMax: 24, wave: "Lfo_Waveform", enable: "Lfo_Enabled" },
+  };
+
+  const WT = {
+    wtOsc1: { pos: "Voice_Oscillator1_Wavetables_WavePosition", gain: "Voice_Oscillator1_Gain", on: "Voice_Oscillator1_On", detune: "Voice_Oscillator1_Pitch_Detune" },
+    wtOsc2: { pos: "Voice_Oscillator2_Wavetables_WavePosition", gain: "Voice_Oscillator2_Gain", on: "Voice_Oscillator2_On" },
+  };
+
+  const AR = {
+    autoFilterEnv: { a: "Envelope_Attack", r: "Envelope_Release", aMax: 2, rMax: 4, amount: "Envelope_Amount" },
+    phaserEnv: { a: "Modulation_EnvelopeAttack", r: "Modulation_EnvelopeRelease", aMax: 2, rMax: 4, amount: "Modulation_EnvelopeAmount", enable: "Modulation_EnvelopeEnabled" },
   };
 
   function p(item, id, fallback) {
@@ -511,12 +625,11 @@
     return [Math.max(0.001, l), Math.max(0.001, r)];
   }
 
-  function drawDelay(ctx, w, h, item) {
+  function drawDelayFilter(ctx, w, h, item) {
     const filterOn = p(item, "Filter_On", true);
     const freq = p(item, "Filter_Frequency", 1000);
     const bw = p(item, "Filter_Bandwidth", 8);
-    const split = Math.floor(h * 0.68);
-    freqGrid(ctx, w, split, 0, split);
+    freqGrid(ctx, w, h, 0, h);
     const lo = -24;
     const hi = 6;
     const coef = rbjBandPass(freq, bw);
@@ -525,13 +638,13 @@
     for (let i = 0; i <= n; i++) {
       const f = freqAt(i / n);
       const mag = filterOn ? db(magBiquad(...coef, f)) : 0;
-      pts.push({ x: (i / n) * w, y: yDb(split, mag, lo, hi, 8) });
+      pts.push({ x: (i / n) * w, y: yDb(h, mag, lo, hi) });
     }
     ctx.globalAlpha = filterOn ? 1 : 0.35;
     ctx.beginPath();
-    ctx.moveTo(0, yDb(split, -24, lo, hi, 8));
+    ctx.moveTo(0, h);
     for (const pt of pts) ctx.lineTo(pt.x, pt.y);
-    ctx.lineTo(w, yDb(split, -24, lo, hi, 8));
+    ctx.lineTo(w, h);
     ctx.closePath();
     ctx.fillStyle = "rgba(0,229,255,0.16)";
     ctx.fill();
@@ -541,17 +654,20 @@
     ctx.strokeStyle = CYAN;
     ctx.lineWidth = 1.8;
     ctx.stroke();
-    handle(ctx, logx(freq) * w, pts[Math.round(logx(freq) * pts.length)]?.y || yDb(split, 0, lo, hi, 8), CYAN);
+    handle(ctx, logx(freq) * w, pts[Math.round(logx(freq) * (pts.length - 1))]?.y || yDb(h, 0, lo, hi), CYAN);
     ctx.globalAlpha = 1;
+    labels(ctx, w, h, [{ text: filterOn ? `${Math.round(freq)} Hz` : "filter off", x: 6, y: 12 }]);
+  }
 
+  function drawDelayTaps(ctx, w, h, item) {
     const [tL, tR] = delayTimes(item);
     const maxT = Math.max(1.2, tL, tR) * 1.15;
     const ping = p(item, "DelayLine_PingPong", false);
     const fb = p(item, "Feedback", 0.45);
-    ctx.fillStyle = "#101012";
-    ctx.fillRect(0, split, w, h - split);
+    freqGrid(ctx, w, h, 0, h);
+    const y0 = h * 0.82;
     ctx.strokeStyle = GRID;
-    ctx.beginPath(); ctx.moveTo(0, split); ctx.lineTo(w, split); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(w, y0); ctx.stroke();
     const echoes = ping ? 8 : 6;
     for (let i = 1; i <= echoes; i++) {
       const t = (i % 2 ? tL : tR) + Math.floor((i - 1) / 2) * (tL + tR) * (ping ? 0.5 : 1);
@@ -559,13 +675,24 @@
       const amp = fb ** i;
       ctx.fillStyle = i % 2 ? CYAN : PINK;
       ctx.globalAlpha = 0.25 + amp * 0.7;
-      ctx.fillRect(x - 2, split + 8, 3, (h - split - 16) * amp);
+      ctx.fillRect(x - 2, y0 - (h * 0.62) * amp, 3, (h * 0.62) * amp);
     }
     ctx.globalAlpha = 1;
-    labels(ctx, w, h, [
-      { text: filterOn ? `${Math.round(freq)} Hz` : "filter off", x: 6, y: 12 },
-      { text: ping ? "ping pong" : "L / R", x: 6, y: split + 14 },
-    ]);
+    labels(ctx, w, h, [{ text: ping ? "ping pong" : "L / R", x: 6, y: 14 }]);
+  }
+
+  function drawDelay(ctx, w, h, item) {
+    const split = Math.floor(h * 0.62);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, w, split);
+    ctx.clip();
+    drawDelayFilter(ctx, w, split, item);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(0, split);
+    drawDelayTaps(ctx, w, h - split, item);
+    ctx.restore();
   }
 
   function lfoValue(shape, phase, morph) {
@@ -791,24 +918,56 @@
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    const eqH = 28;
-    const filters = [];
-    if (p(item, "ShelfLowOn", true)) filters.push(rbjLowShelf(p(item, "ShelfLoFreq", 90), db(p(item, "ShelfLoGain", 1))));
-    if (p(item, "ShelfHighOn", true)) filters.push(rbjHighShelf(p(item, "ShelfHiFreq", 4500), db(p(item, "ShelfHiGain", 0.7))));
-    if (filters.length) {
-      ctx.beginPath();
-      for (let i = 0; i <= w; i++) {
-        const mag = cascadeDb(filters, freqAt(i / w));
-        const y = 6 + (1 - (mag + 12) / 24) * eqH;
-        if (i === 0) ctx.moveTo(i, y); else ctx.lineTo(i, y);
-      }
-      ctx.strokeStyle = AMBER;
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-    }
     labels(ctx, w, h, [
       { text: freeze ? "freeze" : `${Math.round(decay)} ms decay`, x: 8, y: 14 },
       { text: `${Math.round(pre)} ms pre`, x: 8, y: h - 8 },
+    ]);
+  }
+
+  function drawReverbEq(ctx, w, h, item) {
+    const lo = -18;
+    const hi = 18;
+    freqGrid(ctx, w, h, 0, h);
+    const zero = yDb(h, 0, lo, hi);
+    ctx.strokeStyle = "rgba(244,234,240,0.18)";
+    ctx.beginPath();
+    ctx.moveTo(0, zero);
+    ctx.lineTo(w, zero);
+    ctx.stroke();
+    const filters = [];
+    if (p(item, "ShelfLowOn", true)) filters.push(rbjLowShelf(p(item, "ShelfLoFreq", 90), db(p(item, "ShelfLoGain", 1))));
+    if (p(item, "ShelfHighOn", true)) filters.push(rbjHighShelf(p(item, "ShelfHiFreq", 4500), db(p(item, "ShelfHiGain", 0.7))));
+    if (p(item, "BandLowOn", true) || p(item, "BandHighOn", false)) {
+      const sign = p(item, "BandHighOn", false) ? 1 : -1;
+      filters.push(rbjPeak(p(item, "BandFreq", 830), sign * 6, p(item, "BandWidth", 5.85)));
+    }
+    const n = Math.max(80, Math.floor(w));
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const f = freqAt(i / n);
+      pts.push({ x: (i / n) * w, y: yDb(h, filters.length ? cascadeDb(filters, f) : 0, lo, hi) });
+    }
+    ctx.beginPath();
+    ctx.moveTo(0, zero);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.lineTo(w, zero);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,138,74,0.18)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    const loF = p(item, "ShelfLoFreq", 90);
+    const hiF = p(item, "ShelfHiFreq", 4500);
+    if (p(item, "ShelfLowOn", true)) handle(ctx, logx(loF) * w, yDb(h, db(p(item, "ShelfLoGain", 1)), lo, hi), AMBER);
+    if (p(item, "ShelfHighOn", true)) handle(ctx, logx(hiF) * w, yDb(h, db(p(item, "ShelfHiGain", 0.7)), lo, hi), PINK);
+    labels(ctx, w, h, [
+      { text: "20", x: 4, y: h - 6 },
+      { text: "1k", x: logx(1000) * w - 6, y: h - 6 },
+      { text: "20k", x: w - 22, y: h - 6 },
     ]);
   }
 
@@ -1134,6 +1293,291 @@
     return t > 0.5 ? b : a;
   }
 
+  function oscSample(type, shape, t) {
+    const phase = t * Math.PI * 2;
+    const s = clamp(shape, 0, 1);
+    if (type === "Triangle") return 1 - 4 * Math.abs((t + 0.25) % 1 - 0.5);
+    if (type === "Saw") return 2 * t - 1;
+    if (type === "Rectangle") return (t % 1) < 0.5 + s * 0.45 ? 1 : -1;
+    if (type === "Pulse") return Math.sin(phase) > (s * 1.8 - 0.9) ? 1 : -1;
+    if (type === "Shark Tooth") return Math.sin(phase) * (1 - s) + (2 * t - 1) * s;
+    if (type === "Saturated") return Math.tanh(Math.sin(phase) * (1.4 + s * 6));
+    return Math.sin(phase + s * Math.sin(phase * 2) * 0.6);
+  }
+
+  function drawWave(ctx, w, h, sample) {
+    const mid = h * 0.5;
+    const amp = h * 0.36;
+    const n = Math.max(80, Math.floor(w));
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      ctx.lineTo(t * w, mid - sample(t) * amp);
+    }
+    ctx.strokeStyle = CYAN;
+    ctx.lineWidth = 1.7;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(w, mid);
+    ctx.strokeStyle = GRID;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  function drawDriftOsc(ctx, w, h, item) {
+    freqGrid(ctx, w, h, 0, h);
+    const g1 = p(item, "Mixer_OscillatorOn1", true) === false ? 0 : p(item, "Mixer_OscillatorGain1", 0.8);
+    const g2 = p(item, "Mixer_OscillatorOn2", true) === false ? 0 : p(item, "Mixer_OscillatorGain2", 0);
+    const gn = p(item, "Mixer_NoiseOn", false) ? p(item, "Mixer_NoiseLevel", 0) : 0;
+    const t1 = p(item, "Oscillator1_Type", "Saw");
+    const t2 = p(item, "Oscillator2_Type", "Saw");
+    const sh = p(item, "Oscillator1_Shape", 0);
+    drawWave(ctx, w, h, (t) => {
+      const a = oscSample(t1, sh, t) * g1;
+      const b = oscSample(t2, 0, (t + p(item, "Oscillator2_Detune", 0) * 0.01) % 1) * g2;
+      const n = gn ? ((t * 37) % 1) * 2 - 1 : 0;
+      const sum = g1 + g2 + gn || 1;
+      return (a + b + n * gn) / sum;
+    });
+    labels(ctx, w, h, [
+      { text: `${t1}${g2 ? " + " + t2 : ""}`, x: 8, y: 14 },
+      { text: `shape ${sh.toFixed(2)}`, x: 8, y: h - 8 },
+    ]);
+  }
+
+  function drawWavetableOsc(ctx, w, h, item, map) {
+    freqGrid(ctx, w, h, 0, h);
+    const spec = WT[map] || WT.wtOsc1;
+    const pos = p(item, spec.pos, 0);
+    const on = p(item, spec.on, spec === WT.wtOsc1) !== false;
+    const gain = on ? p(item, spec.gain, spec === WT.wtOsc1 ? 0.8 : 0) : 0;
+    const detune = spec.detune ? p(item, spec.detune, 0) * 0.004 : 0;
+    drawWave(ctx, w, h, (t) => {
+      const harm = 1 + pos * 5;
+      const a = Math.sin(Math.PI * 2 * t * (1 + detune));
+      const b = Math.sin(Math.PI * 2 * t * harm);
+      return (a * (1 - pos) + b * pos) * (0.25 + gain * 0.75);
+    });
+    labels(ctx, w, h, [
+      { text: on ? `pos ${pos.toFixed(2)}` : "off", x: 8, y: 14 },
+      { text: `level ${gain.toFixed(2)}`, x: 8, y: h - 8 },
+    ]);
+  }
+
+  function adsrCoords(item, map, w, h) {
+    const pad = 10;
+    const inner = w - pad * 2;
+    const a = 0.1 + clamp(p(item, map.a, 0.01) / map.aMax, 0, 1) * 0.22;
+    const d = 0.1 + clamp(p(item, map.d, 0.3) / map.dMax, 0, 1) * 0.22;
+    const s = clamp(p(item, map.s, 0.7), 0, 1);
+    const r = 0.1 + clamp(p(item, map.r, 0.3) / map.rMax, 0, 1) * 0.22;
+    const y0 = h - pad;
+    const yPeak = pad + 4;
+    const yS = lerp(y0, yPeak, s);
+    const x0 = pad;
+    const xA = x0 + a * inner;
+    const xD = xA + d * inner;
+    const xS = Math.min(w - pad - r * inner, xD + 0.22 * inner);
+    const xR = w - pad;
+    return [
+      { x: x0, y: y0 },
+      { x: xA, y: yPeak },
+      { x: xD, y: yS },
+      { x: xS, y: yS },
+      { x: xR, y: y0 },
+    ];
+  }
+
+  function drawAdsr(ctx, w, h, item, map) {
+    if (!map) return;
+    freqGrid(ctx, w, h, 0, h);
+    const pts = adsrCoords(item, map, w, h);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, h);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fillStyle = FILL;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.strokeStyle = PINK;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    for (const pt of pts) handle(ctx, pt.x, pt.y, PINK);
+    labels(ctx, w, h, [
+      { text: "A  D  S  R", x: 8, y: 14 },
+      { text: `sustain ${p(item, map.s, 0.7).toFixed(2)}`, x: 8, y: h - 8 },
+    ]);
+  }
+
+  function drawAhd(ctx, w, h, item, map) {
+    if (!map) return;
+    freqGrid(ctx, w, h, 0, h);
+    const pad = 10;
+    const inner = w - pad * 2;
+    const a = 0.08 + clamp(p(item, map.a, 0.001) / map.aMax, 0, 1) * 0.28;
+    const hold = 0.06 + clamp(p(item, map.h, 0) / map.hMax, 0, 1) * 0.28;
+    const d = 0.12 + clamp(p(item, map.d, 0.2) / map.dMax, 0, 1) * 0.4;
+    const y0 = h - pad;
+    const y1 = pad + 4;
+    const pts = [
+      { x: pad, y: y0 },
+      { x: pad + a * inner, y: y1 },
+      { x: pad + (a + hold) * inner, y: y1 },
+      { x: pad + (a + hold + d) * inner, y: y0 },
+    ];
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, h);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fillStyle = FILL;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    for (const pt of pts) handle(ctx, pt.x, pt.y, AMBER);
+    labels(ctx, w, h, [{ text: "A  H  D", x: 8, y: 14 }]);
+  }
+
+  function drawSampleRegion(ctx, w, h, item) {
+    freqGrid(ctx, w, h, 0, h);
+    const start = clamp(p(item, "Voice_PlaybackStart", 0), 0, 1);
+    const length = clamp(p(item, "Voice_PlaybackLength", 1), 0, 1);
+    const x0 = start * w;
+    const x1 = clamp(start + length, 0, 1) * w;
+    ctx.fillStyle = FILL;
+    ctx.fillRect(x0, 8, Math.max(2, x1 - x0), h - 16);
+    ctx.strokeStyle = CYAN;
+    ctx.strokeRect(x0 + 0.5, 8.5, Math.max(2, x1 - x0) - 1, h - 17);
+    ctx.beginPath();
+    const mid = h * 0.5;
+    for (let i = 0; i <= 80; i++) {
+      const t = i / 80;
+      const env = t < 0.08 ? t / 0.08 : t > 0.75 ? 1 - (t - 0.75) / 0.25 : 1;
+      const y = mid - Math.sin(t * Math.PI * 8) * env * (h * 0.22);
+      if (i) ctx.lineTo(t * w, y);
+      else ctx.moveTo(t * w, y);
+    }
+    ctx.strokeStyle = DIM;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    labels(ctx, w, h, [
+      { text: `start ${start.toFixed(2)}`, x: 8, y: 14 },
+      { text: `length ${length.toFixed(2)}`, x: 8, y: h - 8 },
+    ]);
+  }
+
+  function drawLfo(ctx, w, h, item, map) {
+    if (!map) return;
+    const shape = map.wave ? p(item, map.wave, "Sine") : "Sine";
+    const rate = p(item, map.rate, 1);
+    let amount;
+    if (map.amountIsBool) amount = p(item, map.enable || map.amount, false) ? 1 : 0.22;
+    else amount = clamp(p(item, map.amount, 0.5) / (map.amountMax || 1), 0, 1);
+    if (map.enable && p(item, map.enable, true) === false) amount *= 0.22;
+    const cycles = 1.5 + clamp(Math.log10(Math.max(0.05, rate)) + 1.2, 0, 2.6);
+    freqGrid(ctx, w, h, 0, h);
+    ctx.strokeStyle = GRID;
+    ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+    const pts = [];
+    for (let i = 0; i <= w; i++) {
+      const val = lfoValue(shape, (i / w) * cycles, 0);
+      pts.push({ x: i, y: h / 2 - val * amount * (h * 0.38) });
+    }
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.strokeStyle = VIOLET;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    handle(ctx, w * 0.82, h / 2 - amount * (h * 0.38), VIOLET);
+    labels(ctx, w, h, [
+      { text: shape, x: 8, y: 14 },
+      { text: `${Number(rate).toFixed(2)} Hz`, x: 8, y: h - 8 },
+    ]);
+  }
+
+  function drawAr(ctx, w, h, item, map) {
+    if (!map) return;
+    freqGrid(ctx, w, h, 0, h);
+    const pad = 10;
+    const inner = w - pad * 2;
+    const a = 0.08 + clamp(p(item, map.a, 0.01) / map.aMax, 0, 1) * 0.32;
+    const r = 0.12 + clamp(p(item, map.r, 0.2) / map.rMax, 0, 1) * 0.4;
+    const amt = map.amount ? clamp(Math.abs(p(item, map.amount, 0.5)) / Math.max(1, Math.abs(p(item, map.amount, 0.5)) > 1 ? 24 : 1), 0.2, 1) : 0.85;
+    const y0 = h - pad;
+    const y1 = pad + 4 + (1 - amt) * (h * 0.35);
+    const xA = pad + a * inner;
+    const xR = w - pad - r * inner;
+    const pts = [
+      { x: pad, y: y0 },
+      { x: xA, y: y1 },
+      { x: Math.max(xA + 8, xR), y: y1 },
+      { x: w - pad, y: y0 },
+    ];
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, h);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(201,184,255,0.16)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.strokeStyle = VIOLET;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    for (const pt of pts) handle(ctx, pt.x, pt.y, VIOLET);
+    labels(ctx, w, h, [{ text: "A          R", x: 8, y: 14 }]);
+  }
+
+  function drawSatColor(ctx, w, h, item) {
+    const on = p(item, "ColorOn", true) !== false;
+    const freq = p(item, "ColorFrequency", 1000);
+    const width = p(item, "ColorWidth", 0.3);
+    const depth = p(item, "ColorDepth", 0);
+    freqGrid(ctx, w, h, 0, h);
+    const lo = -18;
+    const hi = 18;
+    const zero = yDb(h, 0, lo, hi);
+    ctx.strokeStyle = "rgba(244,234,240,0.18)";
+    ctx.beginPath(); ctx.moveTo(0, zero); ctx.lineTo(w, zero); ctx.stroke();
+    const q = lerp(0.4, 4.5, 1 - width);
+    const coef = rbjPeak(freq, on ? depth : 0, q);
+    const n = Math.max(80, Math.floor(w));
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const f = freqAt(i / n);
+      pts.push({ x: (i / n) * w, y: yDb(h, db(magBiquad(...coef, f)), lo, hi) });
+    }
+    ctx.globalAlpha = on ? 1 : 0.35;
+    ctx.beginPath();
+    ctx.moveTo(0, zero);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.lineTo(w, zero);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,138,74,0.2)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    handle(ctx, logx(freq) * w, yDb(h, on ? depth : 0, lo, hi), AMBER);
+    ctx.globalAlpha = 1;
+    labels(ctx, w, h, [{ text: on ? `${Math.round(freq)} Hz` : "color off", x: 8, y: 14 }]);
+  }
+
   const DRAW = {
     channelEq: drawChannelEq,
     saturator: drawSaturator,
@@ -1176,17 +1620,34 @@
     }[kind] || "";
   }
 
+  function vizKind(canvas, item) {
+    return canvas?.dataset?.fxViz || "device";
+  }
+
   function draw(canvas, item) {
     if (!canvas || !item) return;
     const { ctx, w, h } = setup(canvas);
-    const fn = DRAW[item.kind];
-    if (!fn) return;
+    const viz = vizKind(canvas, item);
+    const mapKey = canvas.dataset.fxMap || "";
     ctx.save();
     if (item.parameters.Enabled === false) ctx.globalAlpha = 0.38;
-    fn(ctx, w, h, item);
+    if (viz === "osc") drawDriftOsc(ctx, w, h, item);
+    else if (viz === "wt") drawWavetableOsc(ctx, w, h, item, mapKey);
+    else if (viz === "adsr") drawAdsr(ctx, w, h, item, ADSR[mapKey]);
+    else if (viz === "ahd") drawAhd(ctx, w, h, item, AHD[mapKey]);
+    else if (viz === "ar") drawAr(ctx, w, h, item, AR[mapKey]);
+    else if (viz === "sample") drawSampleRegion(ctx, w, h, item);
+    else if (viz === "filter") drawSynthFilter(ctx, w, h, item);
+    else if (viz === "lfo") drawLfo(ctx, w, h, item, LFO[mapKey]);
+    else if (viz === "taps") drawDelayTaps(ctx, w, h, item);
+    else if (viz === "delayFilter") drawDelayFilter(ctx, w, h, item);
+    else if (viz === "reverbEq") drawReverbEq(ctx, w, h, item);
+    else if (viz === "satColor") drawSatColor(ctx, w, h, item);
+    else {
+      const fn = DRAW[item.kind];
+      if (fn) fn(ctx, w, h, item);
+    }
     ctx.restore();
-    const cap = canvas.parentElement?.querySelector(".fx-viz-cap");
-    if (cap) cap.textContent = caption(item.kind);
   }
 
   function pointer(canvas, event) {
@@ -1200,10 +1661,96 @@
     };
   }
 
-  function applyDrag(kind, item, pos, setParam) {
+  function applyDrag(kind, item, pos, setParam, viz, mapKey) {
     const { x, y, w, h } = pos;
     const tx = clamp(x / w, 0, 1);
     const ty = clamp(y / h, 0, 1);
+    if (viz === "adsr") {
+      const map = ADSR[mapKey];
+      if (!map) return;
+      if (tx < 0.25) setParam(map.a, clamp(tx / 0.25 * map.aMax, 0, map.aMax));
+      else if (tx < 0.5) setParam(map.d, clamp((tx - 0.25) / 0.25 * map.dMax, 0, map.dMax));
+      else if (tx < 0.75) setParam(map.s, clamp(1 - ty, 0, 1));
+      else setParam(map.r, clamp((tx - 0.75) / 0.25 * map.rMax, 0, map.rMax));
+      return;
+    }
+    if (viz === "ahd") {
+      const map = AHD[mapKey];
+      if (!map) return;
+      if (tx < 0.33) setParam(map.a, clamp(tx / 0.33 * map.aMax, 0, map.aMax));
+      else if (tx < 0.66) setParam(map.h, clamp((tx - 0.33) / 0.33 * map.hMax, 0, map.hMax));
+      else setParam(map.d, clamp((tx - 0.66) / 0.34 * map.dMax, 0, map.dMax));
+      return;
+    }
+    if (viz === "osc") {
+      setParam("Oscillator1_Shape", clamp(tx, 0, 1));
+      setParam("Oscillator1_ShapeMod", clamp(lerp(1, -1, ty), -1, 1));
+      return;
+    }
+    if (viz === "wt") {
+      const spec = WT[mapKey] || WT.wtOsc1;
+      if (spec.on) setParam(spec.on, true);
+      setParam(spec.pos, clamp(tx, 0, 1));
+      setParam(spec.gain, clamp(1 - ty, 0, 1));
+      return;
+    }
+    if (viz === "lfo") {
+      const map = LFO[mapKey];
+      if (!map) return;
+      if (map.enable) setParam(map.enable, true);
+      setParam(map.rate, clamp(lerp(0.05, map.rateMax || 20, tx), 0.01, map.rateMax || 20));
+      if (map.amountIsBool) return;
+      setParam(map.amount, clamp(lerp(map.amountMax || 1, 0, ty), 0, map.amountMax || 1));
+      return;
+    }
+    if (viz === "ar") {
+      const map = AR[mapKey];
+      if (!map) return;
+      if (map.enable) setParam(map.enable, true);
+      if (tx < 0.5) setParam(map.a, clamp(tx / 0.5 * map.aMax, 0, map.aMax));
+      else setParam(map.r, clamp((tx - 0.5) / 0.5 * map.rMax, 0, map.rMax));
+      return;
+    }
+    if (viz === "delayFilter") {
+      setParam("Filter_On", true);
+      setParam("Filter_Frequency", clamp(freqAt(tx), 20, 18000));
+      setParam("Filter_Bandwidth", clamp(lerp(0.5, 12, ty), 0.5, 12));
+      return;
+    }
+    if (viz === "reverbEq") {
+      const f = freqAt(tx);
+      const g = clamp(fromDb(lerp(12, -12, ty)), 0, 2);
+      if (f < 800) {
+        setParam("ShelfLowOn", true);
+        setParam("ShelfLoFreq", clamp(f, 20, 2000));
+        setParam("ShelfLoGain", g);
+      } else {
+        setParam("ShelfHighOn", true);
+        setParam("ShelfHiFreq", clamp(f, 200, 16000));
+        setParam("ShelfHiGain", g);
+      }
+      return;
+    }
+    if (viz === "satColor") {
+      setParam("ColorOn", true);
+      setParam("ColorFrequency", Math.round(clamp(freqAt(tx), 20, 8000)));
+      setParam("ColorDepth", clamp(lerp(24, -24, ty), -24, 24));
+      return;
+    }
+    if (viz === "sample") {
+      setParam("Voice_PlaybackStart", clamp(tx * 0.85, 0, 1));
+      setParam("Voice_PlaybackLength", clamp(1 - ty, 0.02, 1));
+      return;
+    }
+    if (viz === "filter") {
+      const filter = FILTER_PARAMS[kind];
+      if (!filter) return;
+      if (filter.enable) setParam(filter.enable, true);
+      setParam(filter.freq, Math.round(clamp(freqAt(tx), 20, 18000)));
+      const resMax = filter.resMax || 1;
+      setParam(filter.res, clamp(lerp(resMax, 0, ty), 0, resMax));
+      return;
+    }
     if (kind === "channelEq") {
       const f = freqAt(tx);
       const g = fromDb(lerp(18, -18, ty));
@@ -1234,18 +1781,11 @@
     }
     if (kind === "phaser" && p(item, "Mode", "Phaser") === "Phaser") {
       setParam("CenterFrequency", clamp(freqAt(tx), 20, 18000));
+      return;
     }
     if (kind === "autoFilter") {
       setParam("Filter_Frequency", Math.round(clamp(freqAt(tx), 20, 18000)));
       setParam("Filter_Resonance", clamp(lerp(1, 0, ty), 0, 1));
-      return;
-    }
-    const filter = FILTER_PARAMS[kind];
-    if (filter) {
-      if (filter.enable) setParam(filter.enable, true);
-      setParam(filter.freq, Math.round(clamp(freqAt(tx), 20, 18000)));
-      const resMax = filter.resMax || 1;
-      setParam(filter.res, clamp(lerp(resMax, 0, ty), 0, resMax));
       return;
     }
     if (kind === "autoPan") {
@@ -1269,14 +1809,18 @@
     const drag = (event) => {
       const item = getItem();
       if (!item || item.parameters.Enabled === false) return;
-      if (!["channelEq", "delay", "compressor", "limiter", "phaser", "autoFilter", "autoPan", "autoShift", "erosion", "drift", "wavetable", "melodicSampler", "drumRack"].includes(item.kind)) return;
-      applyDrag(item.kind, item, pointer(canvas, event), setParam);
+      const viz = vizKind(canvas, item);
+      if (canvas.dataset.fxStatic === "1") return;
+      if (viz === "taps") return;
+      if (viz === "device" && ["chorus", "redux2", "reverb", "saturator"].includes(item.kind)) return;
+      applyDrag(item.kind, item, pointer(canvas, event), setParam, viz, canvas.dataset.fxMap || "");
     };
     let dragging = false;
     canvas.onpointerdown = (event) => {
       dragging = true;
       const item = getItem();
-      if (item?.kind === "channelEq") {
+      const viz = vizKind(canvas, item);
+      if (item?.kind === "channelEq" && (viz === "device" || !viz)) {
         const pos = pointer(canvas, event);
         const f = freqAt(clamp(pos.x / pos.w, 0, 1));
         canvas._fxBand = f < 280 ? "low" : f > 4200 ? "high" : "mid";
@@ -1294,18 +1838,37 @@
     };
   }
 
-  function groups(kind, params) {
-    const primaryIds = new Set(PRIMARY[kind] || []);
-    const primary = [];
-    const more = [];
-    for (const spec of params || []) {
-      if (spec.id === "Enabled") continue;
-      if (spec.type === "enum" && spec.choices?.length === 1) continue;
-      if (primaryIds.has(spec.id)) primary.push(spec);
-      else more.push(spec);
+  function skipSpec(spec) {
+    return !spec || spec.id === "Enabled" || (spec.type === "enum" && spec.choices?.length === 1);
+  }
+
+  function sections(kind, params) {
+    const list = params || [];
+    const byId = Object.fromEntries(list.map((spec) => [spec.id, spec]));
+    const layout = SECTIONS[kind];
+    if (!layout) {
+      const leftover = list.filter((spec) => !skipSpec(spec));
+      return leftover.length ? [{ id: "all", name: "Parameters", viz: DRAW[kind] ? "device" : null, params: leftover }] : [];
     }
+    const used = new Set();
+    const out = [];
+    for (const section of layout) {
+      const specs = (section.params || []).map((id) => byId[id]).filter((spec) => spec && !skipSpec(spec));
+      specs.forEach((spec) => used.add(spec.id));
+      if (!specs.length && !section.viz) continue;
+      out.push({ ...section, params: specs });
+    }
+    const extra = list.filter((spec) => !skipSpec(spec) && !used.has(spec.id));
+    if (extra.length) out.push({ id: "more", name: "More", viz: null, params: extra });
+    return out;
+  }
+
+  function groups(kind, params) {
+    const laid = sections(kind, params);
+    const primary = laid[0]?.params || [];
+    const more = laid.slice(1).flatMap((section) => section.params || []);
     return { primary, more };
   }
 
-  window.FxViz = { draw, bind, groups, caption };
+  window.FxViz = { draw, bind, groups, sections, caption };
 })();

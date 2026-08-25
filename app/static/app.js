@@ -3142,8 +3142,9 @@ function fxCard(index) {
 
 function redrawFxViz(index) {
   const item = fxItemAt(index);
-  const canvas = fxCard(index)?.querySelector("canvas.fx-viz");
-  if (item && canvas && window.FxViz) window.FxViz.draw(canvas, item);
+  const card = fxCard(index);
+  if (!item || !card || !window.FxViz) return;
+  card.querySelectorAll("canvas.fx-viz").forEach((canvas) => window.FxViz.draw(canvas, item));
 }
 
 function syncFxControl(index, id, value) {
@@ -3317,39 +3318,52 @@ function renderFxCard(index, item, { locked = false } = {}) {
   }
 
   const body = document.createElement("div");
-  body.className = "fx-device";
-  const vizWrap = document.createElement("div");
-  vizWrap.className = "fx-viz-wrap";
-  const canvas = document.createElement("canvas");
-  canvas.className = "fx-viz";
-  canvas.width = 640;
-  canvas.height = 336;
-  const cap = document.createElement("div");
-  cap.className = "fx-viz-cap";
-  cap.textContent = window.FxViz?.caption(item.kind) || "";
-  vizWrap.append(canvas, cap);
-  if (window.FxViz) {
-    window.FxViz.bind(canvas, () => fxItemAt(index), (id, value) => setFxParam(index, id, value, true));
-  }
-
-  const { primary, more } = window.FxViz
-    ? window.FxViz.groups(item.kind, spec?.params || [])
-    : { primary: (spec?.params || []).filter((p) => p.id !== "Enabled"), more: [] };
-  const controls = document.createElement("div");
-  controls.className = "fx-device-controls";
-  controls.append(renderFxParamGroup(index, primary, "primary"));
-  body.append(vizWrap, controls);
-
+  body.className = "fx-device fx-device-live";
+  const layout = window.FxViz?.sections
+    ? window.FxViz.sections(item.kind, spec?.params || [])
+    : [{ id: "all", name: "Parameters", viz: null, params: (spec?.params || []).filter((p) => p.id !== "Enabled") }];
+  const grid = document.createElement("div");
+  grid.className = "fx-sections";
+  for (const section of layout) grid.append(renderFxSection(index, section));
+  body.append(grid);
   card.append(head, body);
-  if (more.length) {
-    const extra = document.createElement("details");
-    extra.className = "fx-more";
-    const summary = document.createElement("summary");
-    summary.textContent = "More parameters";
-    extra.append(summary, renderFxParamGroup(index, more, "more"));
-    card.append(extra);
-  }
   return card;
+}
+
+function renderFxSection(index, section) {
+  const wrap = document.createElement("section");
+  wrap.className = [
+    "fx-section",
+    section.wide ? "wide" : "",
+    section.span === 2 ? "span2" : "",
+    section.viz ? "has-viz" : "",
+  ].filter(Boolean).join(" ");
+  const name = document.createElement("h3");
+  name.className = "fx-section-name";
+  name.textContent = section.name;
+  wrap.append(name);
+  if (section.viz) {
+    const vizWrap = document.createElement("div");
+    vizWrap.className = "fx-viz-wrap";
+    const canvas = document.createElement("canvas");
+    canvas.className = "fx-viz";
+    canvas.dataset.fxViz = section.viz;
+    if (section.map) canvas.dataset.fxMap = section.map;
+    if (section.interactive === false) canvas.dataset.fxStatic = "1";
+    canvas.width = 640;
+    canvas.height = 220;
+    if (section.caption) canvas.title = section.caption;
+    const cap = document.createElement("div");
+    cap.className = "fx-viz-cap";
+    cap.dataset.idle = section.caption || "";
+    vizWrap.append(canvas, cap);
+    if (window.FxViz) {
+      window.FxViz.bind(canvas, () => fxItemAt(index), (id, value) => setFxParam(index, id, value, true));
+    }
+    wrap.append(vizWrap);
+  }
+  if (section.params?.length) wrap.append(renderFxParamGroup(index, section.params, "section"));
+  return wrap;
 }
 
 function renderFxChain() {
@@ -3400,9 +3414,7 @@ function renderFxChain() {
   }
   chain.querySelectorAll("[data-fx-index]").forEach((cardEl) => {
     const index = Number(cardEl.dataset.fxIndex);
-    const canvas = cardEl.querySelector("canvas.fx-viz");
-    if (!canvas) return;
-    fx.resizeObs.observe(canvas);
+    cardEl.querySelectorAll("canvas.fx-viz").forEach((canvas) => fx.resizeObs.observe(canvas));
     redrawFxViz(index);
     requestAnimationFrame(() => redrawFxViz(index));
   });
@@ -3570,22 +3582,25 @@ function fxParamEl(deviceIndex, paramId) {
 function updateFxLiveCaption(slot) {
   const item = fxItemAt(slot.device);
   const spec = item ? fxParamSpec(item.kind, slot.param) : null;
-  const cap = fxCard(slot.device)?.querySelector(".fx-viz-cap");
+  const cap = fxParamEl(slot.device, slot.param)?.closest(".fx-section")?.querySelector(".fx-viz-cap")
+    || fxCard(slot.device)?.querySelector(".fx-viz-cap");
   if (!cap || !spec) return;
   cap.textContent = `${spec.label}  ${fxMacroValueText(slot)}`;
 }
 
 function restoreFxCaption(slot) {
-  const item = slot ? fxItemAt(slot.device) : null;
-  const cap = item ? fxCard(slot.device)?.querySelector(".fx-viz-cap") : null;
-  if (cap) cap.textContent = window.FxViz?.caption(item.kind) || "";
+  const cap = slot
+    ? (fxParamEl(slot.device, slot.param)?.closest(".fx-section")?.querySelector(".fx-viz-cap")
+      || fxCard(slot.device)?.querySelector(".fx-viz-cap"))
+    : null;
+  if (cap) cap.textContent = cap.dataset.idle || "";
 }
 
 function clearFxLive() {
   window.clearTimeout(fx.liveTimer);
   fx.liveTimer = 0;
   const previous = fx.live != null ? fx.macros[fx.live] : null;
-  document.querySelectorAll(".fx-param.live, .fx-card.live, .fx-viz-wrap.live, .fx-knob.turning").forEach((el) => {
+  document.querySelectorAll(".fx-param.live, .fx-card.live, .fx-viz-wrap.live, .fx-section.live, .fx-knob.turning").forEach((el) => {
     el.classList.remove("live", "turning");
   });
   $("fx")?.classList.remove("scrubbing");
@@ -3599,7 +3614,7 @@ function showFxLive(slot, opts) {
   fx.liveTimer = 0;
   if (fx.live !== slot.index) {
     const previous = fx.live != null ? fx.macros[fx.live] : null;
-    document.querySelectorAll(".fx-param.live, .fx-card.live, .fx-viz-wrap.live, .fx-knob.turning").forEach((el) => {
+    document.querySelectorAll(".fx-param.live, .fx-card.live, .fx-viz-wrap.live, .fx-section.live, .fx-knob.turning").forEach((el) => {
       el.classList.remove("live", "turning");
     });
     if (previous && previous !== slot) restoreFxCaption(previous);
@@ -3610,7 +3625,9 @@ function showFxLive(slot, opts) {
   const wrap = fxParamEl(slot.device, slot.param);
   card?.classList.add("live");
   wrap?.classList.add("live");
-  card?.querySelector(".fx-viz-wrap")?.classList.add("live");
+  const section = wrap?.closest(".fx-section");
+  section?.classList.add("live");
+  (section?.querySelector(".fx-viz-wrap") || card?.querySelector(".fx-viz-wrap"))?.classList.add("live");
   document.querySelector(`[data-fx-knob="${slot.index}"]`)?.classList.add("turning");
   const more = wrap?.closest("details.fx-more");
   if (more) more.open = true;

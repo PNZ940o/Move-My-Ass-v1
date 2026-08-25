@@ -1812,6 +1812,44 @@ dialog input.fx-knob-name:focus {
   gap: 14px 20px;
   align-items: stretch;
 }
+.fx-device-live {
+  display: block;
+}
+.fx-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(228px, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+.fx-section {
+  min-width: 0;
+  padding: 7px 9px 9px;
+  background: linear-gradient(180deg, #1b1b1b 0%, #121212 100%);
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+}
+.fx-section.wide {
+  grid-column: 1 / -1;
+}
+.fx-section.span2 {
+  grid-column: span 2;
+}
+.fx-section-name {
+  margin: 0 0 6px;
+  color: #d7b48a;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.fx-section.has-viz canvas.fx-viz {
+  height: 108px;
+  margin-bottom: 6px;
+}
+.fx-section .fx-params {
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 6px 10px;
+}
 .fx-viz-wrap {
   min-width: 0;
   display: flex;
@@ -1822,22 +1860,28 @@ canvas.fx-viz {
   width: 100%;
   height: 148px;
   display: block;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid #2a2a2a;
   background: #101012;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.03);
   touch-action: none;
   cursor: crosshair;
 }
-.fx-card[data-fx-kind="chorus"] canvas.fx-viz,
-.fx-card[data-fx-kind="redux2"] canvas.fx-viz,
-.fx-card[data-fx-kind="reverb"] canvas.fx-viz {
+canvas.fx-viz[data-fx-static="1"] {
   cursor: default;
 }
 .fx-viz-cap {
+  display: none;
   color: var(--faint);
   font-size: 11px;
   letter-spacing: 0.02em;
+}
+.fx-viz-wrap.live .fx-viz-cap {
+  display: block;
+  color: var(--cyan);
+}
+.fx-section.live {
+  border-color: var(--cyan-edge);
 }
 .fx-device-controls { min-width: 0; }
 .fx-params {
@@ -1866,7 +1910,10 @@ canvas.fx-viz {
   #fx #fx-name { width: 100%; }
   .fx-macros { flex-basis: 100%; }
   .fx-device { grid-template-columns: 1fr; }
+  .fx-section.wide,
+  .fx-section.span2 { grid-column: auto; }
   canvas.fx-viz { height: 128px; }
+  .fx-section.has-viz canvas.fx-viz { height: 100px; }
 }
 .fx-param {
   display: grid;
