@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Move My Ass</title>
 <link rel="icon" href="/static/logo.png?v=glitch3">
-<link rel="stylesheet" href="/static/style.css?v=slice3">
+<link rel="stylesheet" href="/static/style.css?v=tabnav1">
 </head>
 <body>
 <header class="topbar">
@@ -23,8 +23,13 @@
 </header>
 
 <dialog id="settings">
-  <form method="dialog" id="settings-form">
-    <h2>Connection</h2>
+  <form method="dialog" id="settings-form" class="studio-form">
+    <div class="studio-top">
+      <div class="studio-title">
+        <span class="kicker">Device</span>
+        <h2>Connection</h2>
+      </div>
+    </div>
     <label>Mode
       <select name="backend" id="f-backend">
         <option value="mock">Mock folder (no device needed)</option>
@@ -34,40 +39,56 @@
     <label>Host <input name="host" id="f-host" placeholder="move.local"></label>
     <label>User <input name="user" id="f-user" placeholder="ableton"></label>
     <label>SSH key <input name="key_path" id="f-key" placeholder="~/.ssh/id_ed25519 (blank = agent / defaults)"></label>
-    <p class="hint" id="settings-hint"></p>
-    <menu>
-      <button value="cancel" class="ghost">Cancel</button>
-      <button value="connect" id="btn-connect" class="primary">Connect</button>
-    </menu>
+    <div class="studio-foot">
+      <p class="hint" id="settings-hint"></p>
+      <menu>
+        <button value="cancel" class="ghost">Cancel</button>
+        <button value="connect" id="btn-connect" class="primary">Connect</button>
+      </menu>
+    </div>
   </form>
 </dialog>
 
 <dialog id="ask">
-  <form method="dialog" id="ask-form">
-    <h2 id="ask-title">New folder</h2>
+  <form method="dialog" id="ask-form" class="studio-form">
+    <div class="studio-top">
+      <div class="studio-title">
+        <span class="kicker">Library</span>
+        <h2 id="ask-title">New folder</h2>
+      </div>
+    </div>
     <label><span id="ask-label">Name</span>
       <input id="ask-input" autocomplete="off" spellcheck="false">
     </label>
-    <p class="hint" id="ask-hint"></p>
-    <menu>
-      <button type="button" id="ask-cancel" class="ghost">Cancel</button>
-      <button value="ok" id="ask-ok" class="primary">OK</button>
-    </menu>
+    <div class="studio-foot">
+      <p class="hint" id="ask-hint"></p>
+      <menu>
+        <button type="button" id="ask-cancel" class="ghost">Cancel</button>
+        <button value="ok" id="ask-ok" class="primary">OK</button>
+      </menu>
+    </div>
   </form>
 </dialog>
 
 <dialog id="color-picker">
-  <h2 id="color-title">Pad color</h2>
+  <div class="studio-top">
+    <div class="studio-title">
+      <span class="kicker">Sets</span>
+      <h2 id="color-title">Pad color</h2>
+    </div>
+  </div>
   <div class="color-grid" id="color-grid"></div>
-  <p class="hint">This is the LED colour on the 32-pad grid.</p>
-  <menu>
-    <button type="button" id="color-cancel" class="ghost">Cancel</button>
-  </menu>
+  <div class="studio-foot">
+    <p class="hint">This is the LED colour on the 32-pad grid.</p>
+    <menu>
+      <button type="button" id="color-cancel" class="ghost">Cancel</button>
+    </menu>
+  </div>
 </dialog>
 
-<nav class="tabs" id="tabs">
+<nav class="tabs" aria-label="Library">
   {% for section in sections %}
-  <button class="tab" data-kind="{{ section }}">{{ section_labels.get(section, section) }}</button>
+  <button type="button" class="tab{% if section == 'factory' %} factory{% endif %}" data-kind="{{ section }}">{{ section_labels.get(section, section) }}</button>
   {% endfor %}
 </nav>
 
@@ -90,6 +111,9 @@
       <button id="btn-kit">Build kit from folder</button>
       <button id="btn-slice" disabled>Slice into kit</button>
     </div>
+    <div class="toolbar-fx" id="toolbar-fx" hidden>
+      <button id="btn-fx">Make effect</button>
+    </div>
   </div>
 
   <input type="file" id="file-input" multiple hidden>
@@ -107,51 +131,66 @@
       </thead>
       <tbody id="rows"></tbody>
     </table>
+    <div id="setgrid" class="set-grid" hidden></div>
+    <div id="set-loose" class="set-loose" hidden></div>
     <div id="empty" class="empty" hidden></div>
     <div class="drop-overlay"><span>Drop to upload here</span></div>
   </div>
 </main>
 
 <dialog id="kit">
-  <h2 id="kit-title">Build kit</h2>
-  <div class="kit-meta">
-    <label>Kit name <input id="kit-name" placeholder="My Kit"></label>
-    <label>Type
-      <select id="kit-type">
-        <option value="drum">Drum — one shot, pads ring out</option>
-        <option value="choke">Choke — pads cut each other off</option>
-        <option value="gate">Gate — sustains while held</option>
-      </select>
-    </label>
-    <label>Return FX
-      <select id="kit-return-fx">
-        <option value="">Off</option>
-        <option value="reverb" selected>Reverb</option>
-        <option value="saturator">Saturator</option>
-        <option value="delay">Delay</option>
-        <option value="chorus">Chorus-Ensemble</option>
-        <option value="phaser">Phaser-Flanger</option>
-        <option value="channelEq">Channel EQ</option>
-        <option value="compressor">Compressor</option>
-        <option value="limiter">Limiter</option>
-        <option value="redux2">Redux</option>
-      </select>
-    </label>
-    <label>Insert FX
-      <select id="kit-insert-fx">
-        <option value="">Off</option>
-        <option value="reverb">Reverb</option>
-        <option value="saturator" selected>Saturator</option>
-        <option value="delay">Delay</option>
-        <option value="chorus">Chorus-Ensemble</option>
-        <option value="phaser">Phaser-Flanger</option>
-        <option value="channelEq">Channel EQ</option>
-        <option value="compressor">Compressor</option>
-        <option value="limiter">Limiter</option>
-        <option value="redux2">Redux</option>
-      </select>
-    </label>
+  <div class="studio-top">
+    <div class="studio-title">
+      <span class="kicker" id="kit-kicker">Drum rack</span>
+      <h2 id="kit-title">Build kit</h2>
+    </div>
   </div>
+  <section class="studio-card">
+    <div class="studio-card-head">
+      <div>
+        <span class="kicker">Setup</span>
+        <strong>Kit</strong>
+      </div>
+    </div>
+    <div class="kit-meta">
+      <label>Kit name <input id="kit-name" placeholder="My Kit"></label>
+      <label>Type
+        <select id="kit-type">
+          <option value="drum">Drum — one shot, pads ring out</option>
+          <option value="choke">Choke — pads cut each other off</option>
+          <option value="gate">Gate — sustains while held</option>
+        </select>
+      </label>
+      <label>Return FX
+        <select id="kit-return-fx">
+          <option value="">Off</option>
+          <option value="reverb" selected>Reverb</option>
+          <option value="saturator">Saturator</option>
+          <option value="delay">Delay</option>
+          <option value="chorus">Chorus-Ensemble</option>
+          <option value="phaser">Phaser-Flanger</option>
+          <option value="channelEq">Channel EQ</option>
+          <option value="compressor">Compressor</option>
+          <option value="limiter">Limiter</option>
+          <option value="redux2">Redux</option>
+        </select>
+      </label>
+      <label>Insert FX
+        <select id="kit-insert-fx">
+          <option value="">Off</option>
+          <option value="reverb">Reverb</option>
+          <option value="saturator" selected>Saturator</option>
+          <option value="delay">Delay</option>
+          <option value="chorus">Chorus-Ensemble</option>
+          <option value="phaser">Phaser-Flanger</option>
+          <option value="channelEq">Channel EQ</option>
+          <option value="compressor">Compressor</option>
+          <option value="limiter">Limiter</option>
+          <option value="redux2">Redux</option>
+        </select>
+      </label>
+    </div>
+  </section>
 
   <div id="kit-slice-controls" hidden>
     <label>Slices <span id="slice-count-label">16</span>
@@ -164,13 +203,32 @@
   </div>
 
   <div class="padgrid" id="padgrid"></div>
-  <p class="hint" id="kit-hint"></p>
+  <div class="studio-foot">
+    <p class="hint" id="kit-hint"></p>
+    <menu>
+      <button id="kit-cancel" class="ghost">Cancel</button>
+      <button id="kit-download" class="ghost">Download bundle</button>
+      <button id="kit-save" class="primary">Save to Move</button>
+    </menu>
+  </div>
+</dialog>
 
-  <menu>
-    <button id="kit-cancel" class="ghost">Cancel</button>
-    <button id="kit-download" class="ghost">Download bundle</button>
-    <button id="kit-save" class="primary">Save to Move</button>
-  </menu>
+<dialog id="fx">
+  <div class="fx-bar">
+    <input id="fx-name" placeholder="My Effect" autocomplete="off" spellcheck="false" aria-label="Effect name">
+    <div class="fx-macros" id="fx-macros"></div>
+    <button type="button" id="fx-macros-fill" class="ghost">Fill knobs</button>
+  </div>
+  <div class="fx-add" id="fx-add"></div>
+  <div class="fx-chain" id="fx-chain"></div>
+  <div class="fx-foot">
+    <p class="hint" id="fx-hint">Add devices to the rack, then click a knob to map it.</p>
+    <menu>
+      <button id="fx-cancel" class="ghost">Cancel</button>
+      <button id="fx-download" class="ghost">Download</button>
+      <button id="fx-save" class="primary">Save to Move</button>
+    </menu>
+  </div>
 </dialog>
 
 <footer class="statusbar">
@@ -180,6 +238,7 @@
 </footer>
 
 <div id="toasts"></div>
-<script src="/static/app.js?v=slice3"></script>
+<script src="/static/fx-viz.js?v=fxnew1"></script>
+<script src="/static/app.js?v=tabsleft1"></script>
 </body>
 </html>

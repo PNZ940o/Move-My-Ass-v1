@@ -16,6 +16,7 @@ import json
 import posixpath
 import re
 import shlex
+import uuid as uuidlib
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -135,11 +136,14 @@ def collect(backend: MoveBackend) -> dict[str, SetMeta]:
     return found
 
 
-def write_sidecar(backend: MoveBackend, uuid: str, pad_index: int, color_id: int) -> None:
-    payload = json.dumps(
-        {"user.song-index": str(pad_index), "user.song-color": str(color_id)}
-    ).encode("utf-8")
-    backend.write_file(posixpath.join(paths.SETS, uuid, XATTR_FILE), payload)
+def write_sidecar(backend: MoveBackend, uuid: str, pad_index: int | None, color_id: int) -> None:
+    payload = {"user.song-color": str(color_id)}
+    if pad_index is not None:
+        payload["user.song-index"] = str(pad_index)
+    backend.write_file(
+        posixpath.join(paths.SETS, uuid, XATTR_FILE),
+        json.dumps(payload).encode("utf-8"),
+    )
 
 
 def set_color(backend: MoveBackend, uuid: str, color_id: int) -> int:
@@ -161,7 +165,7 @@ def set_color(backend: MoveBackend, uuid: str, color_id: int) -> int:
             raise RuntimeError(detail)
     else:
         attrs = _read_sidecar(backend, uuid)
-        pad_index = _int_or_none(attrs.get("user.song-index", "")) or 0
+        pad_index = _int_or_none(attrs.get("user.song-index", ""))
         write_sidecar(backend, uuid, pad_index, color_id)
 
     backend.refresh_library()
@@ -197,3 +201,131 @@ def rename_set(backend: MoveBackend, uuid: str, new_name: str) -> str:
 
     backend.refresh_library()
     return new_name
+
+
+def _rewrite_song_uuid(backend: MoveBackend, folder: str, old_uuid: str, new_uuid: str) -> None:
+    """Point Song.abl at the copied UUID. Walk files so it works over SFTP too."""
+    for entry in backend.list_dir(folder):
+        if entry.is_dir:
+            _rewrite_song_uuid(backend, entry.path, old_uuid, new_uuid)
+            continue
+        if entry.name != "Song.abl":
+            continue
+        text = backend.read_file(entry.path).decode("utf-8", "replace")
+        if old_uuid not in text:
+            continue
+        backend.write_file(entry.path, text.replace(old_uuid, new_uuid).encode("utf-8"))
+
+
+def _assign_pad(backend: MoveBackend, uuid: str, pad_index: int, color_id: int) -> None:
+    folder = posixpath.join(paths.SETS, uuid)
+    if backend.label == "sftp":
+        quoted = shlex.quote(folder)
+        result = backend.run(
+            f"setfattr -n user.song-index -v {int(pad_index)} {quoted} && "
+            f"setfattr -n user.song-color -v {int(color_id)} {quoted}"
+        )
+        if not result.ok:
+            detail = (result.stderr or result.stdout or "setfattr failed").strip()
+            raise RuntimeError(detail)
+        return
+    write_sidecar(backend, uuid, pad_index, color_id)
+
+
+def _clear_pad_index(backend: MoveBackend, uuid: str, color_id: int) -> None:
+    """Keep colour, drop the pad so the set is stored on Move but off the grid."""
+    folder = posixpath.join(paths.SETS, uuid)
+    if backend.label == "sftp":
+        quoted = shlex.quote(folder)
+        result = backend.run(
+            f"setfattr -x user.song-index {quoted} 2>/dev/null; "
+            f"setfattr -n user.song-color -v {int(color_id)} {quoted}"
+        )
+        if not result.ok:
+            detail = (result.stderr or result.stdout or "couldn't clear pad index").strip()
+            raise RuntimeError(detail)
+        return
+    write_sidecar(backend, uuid, None, color_id)
+
+
+def _duplicate_set(backend: MoveBackend, uuid: str) -> tuple[str, int]:
+    """Copy a set folder to a new UUID. Caller assigns or clears the pad."""
+    if not is_set_uuid(uuid):
+        raise ValueError("not a pad set")
+    source = posixpath.join(paths.SETS, uuid)
+    if not backend.is_dir(source):
+        raise FileNotFoundError("set not found")
+
+    meta = collect(backend).get(uuid)
+    color_id = meta.color_id if meta and meta.color_id is not None else 1
+
+    new_uuid = str(uuidlib.uuid4())
+    dest = posixpath.join(paths.SETS, new_uuid)
+    while backend.exists(dest):
+        new_uuid = str(uuidlib.uuid4())
+        dest = posixpath.join(paths.SETS, new_uuid)
+
+    try:
+        backend.copy_tree(source, dest)
+        _rewrite_song_uuid(backend, dest, uuid, new_uuid)
+    except Exception:
+        if backend.exists(dest):
+            backend.remove(dest)
+        raise
+    return new_uuid, color_id
+
+
+def copy_to_pad(backend: MoveBackend, uuid: str, pad_number: int) -> dict:
+    """Duplicate a set onto an empty pad. Source stays put."""
+    if not isinstance(pad_number, int) or pad_number < 1 or pad_number > 32:
+        raise ValueError("pad must be 1–32")
+
+    pad_index = pad_number - 1
+    meta_map = collect(backend)
+    if pad_index in {meta.pad_index for meta in meta_map.values() if meta.pad_index is not None}:
+        raise FileExistsError(f"pad {pad_number} is already used")
+
+    new_uuid, color_id = _duplicate_set(backend, uuid)
+    try:
+        _assign_pad(backend, new_uuid, pad_index, color_id)
+    except Exception:
+        dest = posixpath.join(paths.SETS, new_uuid)
+        if backend.exists(dest):
+            backend.remove(dest)
+        raise
+
+    try:
+        backend.refresh_library()
+    except Exception:
+        pass
+    return {
+        "path": new_uuid,
+        "name": _inner_name(backend, new_uuid),
+        "pad": pad_number,
+        "color_id": color_id,
+        "color": hex_color(color_id),
+    }
+
+
+def copy_off_grid(backend: MoveBackend, uuid: str) -> dict:
+    """Duplicate a set on Move with no pad, so it sits under the grid."""
+    new_uuid, color_id = _duplicate_set(backend, uuid)
+    try:
+        _clear_pad_index(backend, new_uuid, color_id)
+    except Exception:
+        dest = posixpath.join(paths.SETS, new_uuid)
+        if backend.exists(dest):
+            backend.remove(dest)
+        raise
+
+    try:
+        backend.refresh_library()
+    except Exception:
+        pass
+    return {
+        "path": new_uuid,
+        "name": _inner_name(backend, new_uuid),
+        "pad": None,
+        "color_id": color_id,
+        "color": hex_color(color_id),
+    }

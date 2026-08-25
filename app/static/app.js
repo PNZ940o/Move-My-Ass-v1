@@ -57,10 +57,19 @@ function formatClockPair(current, duration) {
   return `${formatClock(current, minDigits)} / ${formatClock(total, minDigits)}`;
 }
 
+function apiError(body, response) {
+  const detail = body?.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map((item) => item.msg || item).join("; ");
+  }
+  return `${response.status} ${response.statusText}`;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || `${response.status} ${response.statusText}`);
+  if (!response.ok) throw new Error(apiError(body, response));
   return body;
 }
 
@@ -220,6 +229,7 @@ const ICONS = { folder: "▸", audio: "♪", preset: "◆", set: "●", other: "
 
 /* In-listing drag onto a folder. Flag, not a MIME type — Safari hides custom types. */
 let internalMove = null;
+let internalSetCopy = null;
 
 function knownItems() {
   const found = [...state.items];
@@ -877,14 +887,328 @@ function appendTree(list, depth) {
   }
 }
 
+function showingSetPads() {
+  return state.kind === "sets" && !state.path;
+}
+
+function inkOn(hex) {
+  if (!hex || hex[0] !== "#") return "var(--text)";
+  const n = hex.replace("#", "");
+  if (n.length !== 6 && n.length !== 3) return "var(--text)";
+  const full = n.length === 3 ? n.split("").map((c) => c + c).join("") : n;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luma > 0.58 ? "#121212" : "#f7f2f4";
+}
+
+function bindSetName(nameEl, item) {
+  nameEl.draggable = false;
+  nameEl.onclick = (event) => {
+    event.stopPropagation();
+    if (padDragMoved) {
+      event.preventDefault();
+      return;
+    }
+    if (event.detail > 1) {
+      cancelPendingRename();
+      return;
+    }
+    state.selected = new Set([item.path]);
+    highlightSelection();
+    if (isFactory()) return;
+    startInlineRename(item, nameEl);
+  };
+}
+
+function makeSetPad(num, item) {
+  const pad = document.createElement("div");
+  pad.className = "set-pad" + (item ? " filled" : " empty");
+  pad.dataset.pad = String(num);
+
+  const numEl = document.createElement("span");
+  numEl.className = "set-pad-num";
+  numEl.textContent = String(num);
+  pad.append(numEl);
+
+  if (!item) {
+    pad.setAttribute("aria-label", `Empty pad ${num}`);
+    return pad;
+  }
+
+  pad.dataset.path = item.path;
+  pad.setAttribute("role", "button");
+  pad.tabIndex = 0;
+  pad.setAttribute("aria-label", `${item.name}, pad ${num}`);
+  if (item.color) {
+    pad.style.background = item.color;
+    pad.style.color = inkOn(item.color);
+  }
+
+  const nameEl = document.createElement("button");
+  nameEl.type = "button";
+  nameEl.className = "name";
+  nameEl.textContent = item.name;
+  bindSetName(nameEl, item);
+  pad.append(nameEl);
+
+  const date = document.createElement("span");
+  date.className = "set-pad-date";
+  date.textContent = formatDate(item.mtime);
+  pad.append(date);
+
+  pad.onclick = (event) => {
+    if (padDragMoved) return;
+    if (event.target.closest("button.name, .name-edit")) return;
+    cancelPendingRename();
+    selectOnly(item.path);
+  };
+  pad.onkeydown = (event) => {
+    if (event.target.closest(".name-edit")) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectOnly(item.path);
+    }
+  };
+  bindSetCopyDrag(pad, item);
+  return pad;
+}
+
+function hideSetGrid() {
+  $("drop").classList.remove("set-pads");
+  document.querySelector("table.listing").hidden = false;
+  $("setgrid").hidden = true;
+  $("setgrid").innerHTML = "";
+  $("set-loose").hidden = true;
+  $("set-loose").innerHTML = "";
+}
+
+function renderSetGrid() {
+  const grid = $("setgrid");
+  const loose = $("set-loose");
+  $("drop").classList.add("set-pads");
+  document.querySelector("table.listing").hidden = true;
+  grid.hidden = false;
+
+  const byPad = new Map();
+  const extras = [];
+  for (const item of state.items) {
+    const pad = item.pad;
+    if (item.category === "set" && Number.isInteger(pad) && pad >= 1 && pad <= 32) {
+      if (byPad.has(pad)) extras.push(item);
+      else byPad.set(pad, item);
+    } else {
+      extras.push(item);
+    }
+  }
+
+  grid.innerHTML = "";
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 8; col++) {
+      const num = (3 - row) * 8 + col + 1;
+      grid.append(makeSetPad(num, byPad.get(num)));
+    }
+  }
+
+  loose.innerHTML = "";
+  loose.hidden = false;
+  const title = document.createElement("div");
+  title.className = "set-loose-title";
+  title.textContent = "Not on the 32-pad grid";
+  loose.append(title);
+  const hint = document.createElement("div");
+  hint.className = "set-loose-hint";
+  hint.textContent = "Drop a set here to keep a copy on Move, off the pad grid. Drop on an empty pad to copy it onto a pad.";
+  loose.append(hint);
+  for (const item of extras) {
+    const isSet = item.category === "set";
+    const row = document.createElement("div");
+    row.className = "set-loose-item" + (isSet ? "" : " folder");
+    row.dataset.path = item.path;
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    const nameEl = document.createElement("button");
+    nameEl.type = "button";
+    nameEl.className = "name";
+    nameEl.textContent = item.name;
+    bindSetName(nameEl, item);
+    const date = document.createElement("span");
+    date.className = "set-loose-date";
+    date.textContent = formatDate(item.mtime);
+    row.append(nameEl, date);
+    row.onclick = (event) => {
+      if (padDragMoved) return;
+      if (event.target.closest("button.name, .name-edit")) return;
+      cancelPendingRename();
+      selectOnly(item.path);
+    };
+    if (isSet) bindSetCopyDrag(row, item);
+    loose.append(row);
+  }
+}
+
 function renderRows() {
+  if (showingSetPads()) {
+    rows.innerHTML = "";
+    $("empty").hidden = true;
+    renderSetGrid();
+    highlightSelection();
+    return;
+  }
+  hideSetGrid();
   rows.innerHTML = "";
   $("empty").hidden = state.items.length > 0;
   $("empty").textContent = isFactory()
     ? "Nothing here — this account may not be able to read CoreLibrary."
     : "This folder is empty. Drop files here to upload.";
   appendTree(state.items, 0);
-  renderSelection();
+  highlightSelection();
+}
+
+function clearSetCopyDrag() {
+  internalSetCopy = null;
+  $("drop").classList.remove("reordering");
+  document.querySelectorAll(".dragging-pad, .drop-target").forEach((el) => {
+    el.classList.remove("dragging-pad", "drop-target");
+  });
+  document.querySelectorAll(".set-pad-ghost").forEach((el) => el.remove());
+}
+
+let padDragMoved = false;
+
+function nodesAtPoint(x, y) {
+  const ghost = document.querySelector(".set-pad-ghost");
+  if (ghost) ghost.style.visibility = "hidden";
+  const stack = document.elementsFromPoint?.(x, y) || [document.elementFromPoint(x, y)];
+  if (ghost) ghost.style.visibility = "";
+  return stack.filter(Boolean);
+}
+
+function setDropFromPoint(x, y) {
+  const nodes = nodesAtPoint(x, y);
+  for (const node of nodes) {
+    const pad = node.closest?.(".set-pad");
+    if (pad) {
+      const num = Number(pad.dataset.pad);
+      return {
+        kind: pad.classList.contains("empty") ? "empty-pad" : "filled-pad",
+        pad: num,
+        el: pad,
+      };
+    }
+    if (node.closest?.("#set-loose")) {
+      return { kind: "offgrid", el: $("set-loose") };
+    }
+  }
+  return null;
+}
+
+function highlightSetDrop(hit) {
+  document.querySelectorAll(".set-pad.drop-target, #set-loose.drop-target").forEach((el) => {
+    el.classList.remove("drop-target");
+  });
+  if (hit?.kind === "empty-pad") hit.el.classList.add("drop-target");
+  if (hit?.kind === "offgrid") $("set-loose").classList.add("drop-target");
+}
+
+function bindSetCopyDrag(el, item) {
+  el.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest(".name-edit, input")) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let active = false;
+    let ghost = null;
+
+    const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return;
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      if (!active && dx * dx + dy * dy < 64) return;
+      if (!active) {
+        active = true;
+        padDragMoved = true;
+        internalSetCopy = { path: item.path, name: item.name, fromPad: item.pad };
+        el.classList.add("dragging-pad");
+        $("drop").classList.add("reordering");
+        ghost = document.createElement("div");
+        ghost.className = "set-pad-ghost";
+        ghost.textContent = item.name;
+        if (item.color) {
+          ghost.style.background = item.color;
+          ghost.style.color = inkOn(item.color);
+        }
+        document.body.append(ghost);
+        try { el.setPointerCapture(event.pointerId); } catch { /* older browsers */ }
+      }
+      moveEvent.preventDefault();
+      ghost.style.left = `${moveEvent.clientX}px`;
+      ghost.style.top = `${moveEvent.clientY}px`;
+      highlightSetDrop(setDropFromPoint(moveEvent.clientX, moveEvent.clientY));
+    };
+
+    const finish = (upEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      try { el.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+      const hit = active ? setDropFromPoint(upEvent.clientX, upEvent.clientY) : null;
+      const source = internalSetCopy;
+      ghost?.remove();
+      clearSetCopyDrag();
+      if (active) {
+        padDragMoved = true;
+        setTimeout(() => { padDragMoved = false; }, 0);
+      }
+      if (!active || !source) return;
+      if (hit?.kind === "empty-pad" && Number.isInteger(hit.pad) && hit.pad !== source.fromPad) {
+        copySetToPad(source.path, hit.pad, source.name);
+        return;
+      }
+      if (hit?.kind === "filled-pad" && hit.pad !== source.fromPad) {
+        toast(`Pad ${hit.pad} already has a set`, "error");
+        return;
+      }
+      if (hit?.kind === "offgrid") {
+        copySetOffGrid(source.path, source.name);
+      }
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  });
+}
+
+async function copySetOffGrid(path, name) {
+  setStatus(`Saving ${name} off the grid…`);
+  try {
+    const result = await apiJson("/api/copy-set", { path });
+    toast(`Saved ${result.name || name} off the pad grid`, "ok");
+    const keep = result.path;
+    await load();
+    state.selected = new Set([keep]);
+    renderRows();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+  setStatus("Ready");
+}
+
+async function copySetToPad(path, pad, name) {
+  setStatus(`Copying ${name} to pad ${pad}…`);
+  try {
+    const result = await apiJson("/api/copy-set", { path, pad });
+    toast(`Copied ${result.name || name} to pad ${pad}`, "ok");
+    const keep = result.path;
+    await load();
+    state.selected = new Set([keep]);
+    renderRows();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+  setStatus("Ready");
 }
 
 const expandGen = {};
@@ -942,6 +1266,9 @@ function highlightSelection() {
     row.classList.toggle("selected", on);
     const box = row.querySelector("input[type=checkbox]");
     if (box) box.checked = on;
+  }
+  for (const pad of document.querySelectorAll("#setgrid .set-pad[data-path], #set-loose .set-loose-item[data-path]")) {
+    pad.classList.toggle("selected", state.selected.has(pad.dataset.path));
   }
   renderSelection();
 }
@@ -1119,6 +1446,8 @@ function renderSelection() {
   $("btn-slice").hidden = !audioSection;
   $("btn-slice").disabled = !(audioSection && only?.category === "audio" && only.name.toLowerCase().endsWith(".wav"));
   $("toolbar-kit").hidden = !audioSection;
+  const effectsSection = !factory && state.kind === "effects";
+  $("toolbar-fx").hidden = !effectsSection;
   $("btn-rename").hidden = factory;
   $("btn-delete").hidden = factory;
   $("btn-copy").hidden = !factory;
@@ -1313,16 +1642,17 @@ let dragDepth = 0;
 
 drop.addEventListener("dragenter", (event) => {
   event.preventDefault();
-  if (internalMove || isFactory()) return;
+  if (internalMove || internalSetCopy || isFactory()) return;
   dragDepth++;
   drop.classList.add("dragging");
 });
 drop.addEventListener("dragover", (event) => {
   event.preventDefault();
   if (internalMove) event.dataTransfer.dropEffect = "move";
+  if (internalSetCopy) event.dataTransfer.dropEffect = "copy";
 });
 drop.addEventListener("dragleave", () => {
-  if (internalMove) return;
+  if (internalMove || internalSetCopy) return;
   if (--dragDepth <= 0) {
     dragDepth = 0;
     drop.classList.remove("dragging");
@@ -1332,7 +1662,7 @@ drop.addEventListener("drop", async (event) => {
   event.preventDefault();
   dragDepth = 0;
   drop.classList.remove("dragging");
-  if (internalMove) return;
+  if (internalMove || internalSetCopy) return;
   if (isFactory()) {
     toast("Factory library is read-only — copy items into Samples", "error");
     return;
@@ -1427,8 +1757,10 @@ $("color-cancel").onclick = () => $("color-picker").close();
 $("btn-rename").onclick = () => {
   const item = chosenItems()[0];
   if (!item || isFactory()) return;
-  const row = rows.querySelector(`tr[data-path="${CSS.escape(item.path)}"]`);
-  const nameEl = row?.querySelector("button.name");
+  const nameEl =
+    document.querySelector(`#setgrid [data-path="${CSS.escape(item.path)}"] button.name`) ||
+    document.querySelector(`#set-loose [data-path="${CSS.escape(item.path)}"] button.name`) ||
+    rows.querySelector(`tr[data-path="${CSS.escape(item.path)}"] button.name`);
   if (nameEl) startInlineRename(item, nameEl);
 };
 
@@ -1714,6 +2046,7 @@ async function openKitFromFolder() {
       toast("No audio files in this folder", "error");
       return;
     }
+    $("kit-kicker").textContent = "Drum rack";
     $("kit-title").textContent = `Build kit from ${plan.folder || plan.section}`;
     $("kit-name").value = (plan.folder.split("/").pop() || "New") + " Kit";
     $("kit-slice-controls").hidden = true;
@@ -1757,6 +2090,7 @@ async function openKitFromSample() {
   kit.sample = path;
   kit.section = state.kind;
   kit.folder = "";
+  $("kit-kicker").textContent = "Slice";
   $("kit-title").textContent = `Slice ${path.split("/").pop()}`;
   $("kit-name").value = path.split("/").pop().replace(/\.[^.]+$/, "") + " Slices";
   $("kit-slice-controls").hidden = false;
@@ -1841,6 +2175,887 @@ $("kit-download").onclick = async () => {
     toast("Bundle downloaded", "ok");
   } catch (error) {
     $("kit-hint").textContent = error.message;
+  }
+};
+
+/* ---------- effect builder ---------- */
+
+const FX_MAX = 8;
+const fx = { catalog: null, devices: [], macros: emptyFxMacros(), arm: null, live: null, scrubbing: false, liveTimer: 0 };
+
+function emptyFxMacros() {
+  return Array.from({ length: 8 }, (_, index) => ({
+    index, name: "", device: 0, param: "", min: null, max: null,
+  }));
+}
+
+function fxMappableParams(spec) {
+  return (spec?.params || []).filter((p) => p.id !== "Enabled" && p.type !== "enum");
+}
+
+function fxMacroFor(deviceIndex, paramId) {
+  return (fx.macros || []).find((slot) => slot.param === paramId && slot.device === deviceIndex);
+}
+
+function fxParamSpec(kind, paramId) {
+  return (fxSpec(kind)?.params || []).find((p) => p.id === paramId);
+}
+
+function fxSpec(kind) {
+  return (fx.catalog || []).find((item) => item.kind === kind);
+}
+
+function fxSlotsFull() {
+  return fx.devices.length >= FX_MAX;
+}
+
+function updateFxHint() {
+  const hint = $("fx-hint");
+  if (!hint) return;
+  if (fx.live != null) {
+    const slot = fx.macros[fx.live];
+    const source = slot ? fxMacroSource(slot) : "";
+    const value = slot ? fxMacroValueText(slot) : "";
+    hint.textContent = source
+      ? `M${slot.index + 1} · ${source} · ${value}`
+      : `Turning knob ${(slot?.index ?? 0) + 1}`;
+  } else if (fx.arm != null) {
+    hint.textContent = `Click a control to map knob ${fx.arm + 1}. Escape cancels.`;
+  } else if (!fx.devices.length) {
+    hint.textContent = "Add devices to the rack, then click a knob to map it.";
+  } else if (fxSlotsFull()) {
+    hint.textContent = `Rack is full (${FX_MAX}). Remove one to add another.`;
+  } else {
+    const n = fx.devices.length;
+    hint.textContent = `${n} device${n === 1 ? "" : "s"} in the rack. Drag a mapped knob to turn it, or click then a control to map.`;
+  }
+}
+
+function renderFxAdder() {
+  const row = $("fx-add");
+  row.innerHTML = "";
+  const full = fxSlotsFull();
+  for (const spec of fx.catalog || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = spec.name;
+    button.disabled = full;
+    button.title = full ? `Rack is full (${FX_MAX})` : `Add ${spec.name}`;
+    button.onclick = () => addFxDevice(spec);
+    row.append(button);
+  }
+}
+
+function addFxDevice(spec) {
+  if (fxSlotsFull()) {
+    updateFxHint();
+    return;
+  }
+  const parameters = Object.fromEntries(spec.params.map((p) => [p.id, p.default]));
+  fx.devices.push({ kind: spec.kind, parameters });
+  renderFxChain();
+}
+
+function fxCard(index) {
+  return document.querySelector(`[data-fx-index="${index}"]`);
+}
+
+function redrawFxViz(index) {
+  const item = fx.devices[index];
+  const canvas = fxCard(index)?.querySelector("canvas.fx-viz");
+  if (item && canvas && window.FxViz) window.FxViz.draw(canvas, item);
+}
+
+function syncFxControl(index, id, value) {
+  const wrap = fxCard(index)?.querySelector(`[data-fx-param="${id}"]`);
+  if (!wrap) return;
+  const box = wrap.querySelector('input[type="checkbox"]');
+  if (box) box.checked = Boolean(value);
+  const select = wrap.querySelector("select");
+  if (select) select.value = value;
+  const slider = wrap.querySelector('input[type="range"]');
+  const number = wrap.querySelector('input[type="number"]');
+  if (slider) slider.value = value;
+  if (number) number.value = value;
+}
+
+function setFxParam(index, id, value, fromViz) {
+  const item = fx.devices[index];
+  if (!item) return;
+  item.parameters[id] = value;
+  syncFxControl(index, id, value);
+  redrawFxViz(index);
+  updateFxKnobDials();
+  if (fx.live != null && fx.macros[fx.live]?.device === index) {
+    updateFxLiveCaption(fx.macros[fx.live]);
+  }
+}
+
+function renderFxControl(index, spec) {
+  const wrap = document.createElement("div");
+  const mappable = spec.id !== "Enabled" && spec.type !== "enum";
+  wrap.className = `fx-param ${spec.type}${mappable ? " mappable" : ""}`;
+  wrap.dataset.fxParam = spec.id;
+  const label = document.createElement("span");
+  label.className = "fx-param-label";
+  label.textContent = spec.unit ? `${spec.label} (${spec.unit})` : spec.label;
+  const mapped = fxMacroFor(index, spec.id);
+  if (mapped) {
+    const badge = document.createElement("span");
+    badge.className = "fx-m";
+    badge.textContent = `M${mapped.index + 1}`;
+    label.append(badge);
+  }
+  wrap.append(label);
+  if (mappable) {
+    wrap.addEventListener("click", (event) => {
+      if (fx.arm == null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      mapArmedMacro(index, spec);
+    }, true);
+  }
+
+  const value = fx.devices[index].parameters[spec.id];
+  if (spec.type === "bool") {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = Boolean(value);
+    box.onchange = () => setFxParam(index, spec.id, box.checked);
+    wrap.append(box);
+    return wrap;
+  }
+  if (spec.type === "enum") {
+    const select = document.createElement("select");
+    for (const choice of spec.choices) {
+      const option = document.createElement("option");
+      option.value = choice;
+      option.textContent = choice;
+      if (choice === value) option.selected = true;
+      select.append(option);
+    }
+    select.onchange = () => setFxParam(index, spec.id, select.value);
+    wrap.append(select);
+    return wrap;
+  }
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = spec.min;
+  slider.max = spec.max;
+  slider.step = spec.step;
+  slider.value = value;
+  const number = document.createElement("input");
+  number.type = "number";
+  number.min = spec.min;
+  number.max = spec.max;
+  number.step = spec.step;
+  number.value = value;
+  const sync = (raw) => {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const clamped = Math.max(spec.min, Math.min(spec.max, n));
+    slider.value = clamped;
+    number.value = clamped;
+    setFxParam(index, spec.id, clamped);
+  };
+  slider.oninput = () => sync(slider.value);
+  number.onchange = () => sync(number.value);
+  wrap.append(slider, number);
+  return wrap;
+}
+
+function renderFxParamGroup(index, specs, className) {
+  const params = document.createElement("div");
+  params.className = `fx-params ${className || ""}`;
+  for (const spec of specs) params.append(renderFxControl(index, spec));
+  return params;
+}
+
+function renderFxCard(index, item) {
+  const spec = fxSpec(item.kind);
+  const card = document.createElement("div");
+  card.className = "fx-card";
+  card.dataset.fxIndex = String(index);
+  card.dataset.fxKind = item.kind;
+  const head = document.createElement("div");
+  head.className = "fx-card-head";
+  const title = document.createElement("strong");
+  title.textContent = spec?.name || item.kind;
+  const on = document.createElement("label");
+  on.className = "fx-on";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = item.parameters.Enabled !== false;
+  box.onchange = () => setFxParam(index, "Enabled", box.checked);
+  on.append(box, document.createTextNode("On"));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.textContent = "Remove";
+  remove.onclick = () => {
+    fx.devices.splice(index, 1);
+    dropFxMacroDevice(index);
+    renderFxChain();
+  };
+  head.append(title, on);
+  if (fx.devices.length > 1) {
+    const up = document.createElement("button");
+    up.type = "button";
+    up.textContent = "Up";
+    up.disabled = index === 0;
+    up.onclick = () => moveFxDevice(index, -1);
+    const down = document.createElement("button");
+    down.type = "button";
+    down.textContent = "Down";
+    down.disabled = index === fx.devices.length - 1;
+    down.onclick = () => moveFxDevice(index, 1);
+    head.append(up, down);
+  }
+  head.append(remove);
+
+  const body = document.createElement("div");
+  body.className = "fx-device";
+  const vizWrap = document.createElement("div");
+  vizWrap.className = "fx-viz-wrap";
+  const canvas = document.createElement("canvas");
+  canvas.className = "fx-viz";
+  canvas.width = 640;
+  canvas.height = 336;
+  const cap = document.createElement("div");
+  cap.className = "fx-viz-cap";
+  cap.textContent = window.FxViz?.caption(item.kind) || "";
+  vizWrap.append(canvas, cap);
+  if (window.FxViz) {
+    window.FxViz.bind(canvas, () => fx.devices[index], (id, value) => setFxParam(index, id, value, true));
+  }
+
+  const { primary, more } = window.FxViz
+    ? window.FxViz.groups(item.kind, spec?.params || [])
+    : { primary: (spec?.params || []).filter((p) => p.id !== "Enabled"), more: [] };
+  const controls = document.createElement("div");
+  controls.className = "fx-device-controls";
+  controls.append(renderFxParamGroup(index, primary, "primary"));
+  body.append(vizWrap, controls);
+
+  card.append(head, body);
+  if (more.length) {
+    const extra = document.createElement("details");
+    extra.className = "fx-more";
+    const summary = document.createElement("summary");
+    summary.textContent = "More parameters";
+    extra.append(summary, renderFxParamGroup(index, more, "more"));
+    card.append(extra);
+  }
+  return card;
+}
+
+function renderFxChain() {
+  const chain = $("fx-chain");
+  if (fx.resizeObs) fx.resizeObs.disconnect();
+  chain.innerHTML = "";
+  chain.className = "fx-chain";
+  if (!fx.devices.length) {
+    const empty = document.createElement("div");
+    empty.className = "fx-empty";
+    empty.innerHTML = "<strong>Empty rack</strong><span>Add an effect above. The whole chain saves as one device on Move.</span>";
+    chain.append(empty);
+  } else {
+    fx.devices.forEach((item, index) => {
+      if (index) {
+        const flow = document.createElement("div");
+        flow.className = "fx-slot-flow";
+        flow.setAttribute("aria-hidden", "true");
+        chain.append(flow);
+      }
+      chain.append(renderFxCard(index, item));
+    });
+  }
+
+  if (!fx.resizeObs) {
+    fx.resizeObs = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const cardEl = entry.target.closest("[data-fx-index]");
+        if (cardEl) redrawFxViz(Number(cardEl.dataset.fxIndex));
+      }
+    });
+  }
+  for (let index = 0; index < fx.devices.length; index++) {
+    const canvas = fxCard(index)?.querySelector("canvas.fx-viz");
+    if (!canvas) continue;
+    fx.resizeObs.observe(canvas);
+    redrawFxViz(index);
+    requestAnimationFrame(() => redrawFxViz(index));
+  }
+  renderFxAdder();
+  updateFxHint();
+  renderFxMacros();
+}
+
+function moveFxDevice(index, delta) {
+  const next = index + delta;
+  if (next < 0 || next >= fx.devices.length) return;
+  [fx.devices[index], fx.devices[next]] = [fx.devices[next], fx.devices[index]];
+  swapFxMacroDevices(index, next);
+  renderFxChain();
+}
+
+function swapFxMacroDevices(a, b) {
+  for (const slot of fx.macros) {
+    if (slot.device === a) slot.device = b;
+    else if (slot.device === b) slot.device = a;
+  }
+}
+
+function dropFxMacroDevice(index) {
+  for (const slot of fx.macros) {
+    if (slot.device === index) {
+      slot.param = "";
+      slot.name = "";
+      slot.min = null;
+      slot.max = null;
+      slot.device = 0;
+    } else if (slot.device > index) {
+      slot.device -= 1;
+    }
+  }
+}
+
+function applyFxMacroParam(slot, deviceIndex, paramId) {
+  slot.device = deviceIndex;
+  slot.param = paramId;
+  const item = fx.devices[deviceIndex];
+  const spec = item ? fxParamSpec(item.kind, paramId) : null;
+  if (!spec) {
+    slot.name = "";
+    slot.min = null;
+    slot.max = null;
+    return;
+  }
+  if (!slot.name) slot.name = spec.label;
+  if (spec.type === "bool") {
+    slot.min = 0;
+    slot.max = 1;
+  } else {
+    if (slot.min == null) slot.min = spec.min;
+    if (slot.max == null) slot.max = spec.max;
+  }
+}
+
+function fillFxMacrosFromDevice(deviceIndex) {
+  const item = fx.devices[deviceIndex];
+  const spec = fxSpec(item?.kind);
+  const knobs = spec?.knobs || fxMappableParams(spec).map((p) => p.id);
+  const used = new Set(fx.macros.filter((s) => s.param).map((s) => `${s.device}:${s.param}`));
+  for (const paramId of knobs) {
+    const empty = fx.macros.find((s) => !s.param);
+    if (!empty) return;
+    const key = `${deviceIndex}:${paramId}`;
+    if (used.has(key)) continue;
+    const param = fxParamSpec(item.kind, paramId);
+    if (!param || param.type === "enum") continue;
+    applyFxMacroParam(empty, deviceIndex, paramId);
+    used.add(key);
+  }
+}
+
+function fillFxMacrosFromChain() {
+  fx.arm = null;
+  fx.macros = emptyFxMacros();
+  fx.devices.forEach((_, index) => fillFxMacrosFromDevice(index));
+  renderFxChain();
+}
+
+function fxMacroPosition(slot) {
+  if (!slot.param) return 0;
+  const item = fx.devices[slot.device];
+  const spec = item ? fxParamSpec(item.kind, slot.param) : null;
+  if (!spec) return 0;
+  const value = item.parameters[slot.param];
+  if (spec.type === "bool") return value ? 1 : 0;
+  const lo = slot.min ?? spec.min;
+  const hi = slot.max ?? spec.max;
+  if (hi === lo || value == null) return 0;
+  return Math.max(0, Math.min(1, (Number(value) - lo) / (hi - lo)));
+}
+
+function fxKnobRotation(slot) {
+  return -135 + fxMacroPosition(slot) * 270;
+}
+
+function fxFormatValue(spec, value) {
+  if (spec.type === "bool") return value ? "On" : "Off";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  const step = Number(spec.step);
+  let text;
+  if (step >= 1) text = String(Math.round(n));
+  else {
+    const abs = Math.abs(n);
+    const digits = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
+    text = n.toFixed(digits);
+  }
+  return spec.unit ? `${text} ${spec.unit}` : text;
+}
+
+function fxMacroValueText(slot) {
+  if (!slot.param) return "";
+  const item = fx.devices[slot.device];
+  const spec = item ? fxParamSpec(item.kind, slot.param) : null;
+  if (!spec) return "";
+  return fxFormatValue(spec, item.parameters[slot.param]);
+}
+
+function snapFxValue(spec, lo, hi, value) {
+  if (spec.type === "bool") return value >= 0.5;
+  let n = Number(value);
+  if (!Number.isFinite(n)) n = lo;
+  const step = Number(spec.step);
+  if (step > 0 && Number.isFinite(step)) {
+    n = Math.round(n / step) * step;
+    const decimals = Math.min(6, (String(step).split(".")[1] || "").length);
+    n = Number(n.toFixed(decimals || 4));
+  }
+  const a = Math.min(lo, hi);
+  const b = Math.max(lo, hi);
+  return Math.max(a, Math.min(b, n));
+}
+
+function setFxMacroPosition(slot, pos) {
+  if (!slot.param) return;
+  const item = fx.devices[slot.device];
+  const spec = item ? fxParamSpec(item.kind, slot.param) : null;
+  if (!item || !spec) return;
+  const t = Math.max(0, Math.min(1, Number(pos) || 0));
+  if (spec.type === "bool") setFxParam(slot.device, slot.param, t >= 0.5);
+  else {
+    const lo = slot.min ?? spec.min;
+    const hi = slot.max ?? spec.max;
+    setFxParam(slot.device, slot.param, snapFxValue(spec, lo, hi, lo + t * (hi - lo)));
+  }
+  if (fx.live === slot.index) updateFxHint();
+}
+
+function fxParamEl(deviceIndex, paramId) {
+  return fxCard(deviceIndex)?.querySelector(`[data-fx-param="${paramId}"]`);
+}
+
+function updateFxLiveCaption(slot) {
+  const item = fx.devices[slot.device];
+  const spec = item ? fxParamSpec(item.kind, slot.param) : null;
+  const cap = fxCard(slot.device)?.querySelector(".fx-viz-cap");
+  if (!cap || !spec) return;
+  cap.textContent = `${spec.label}  ${fxMacroValueText(slot)}`;
+}
+
+function restoreFxCaption(slot) {
+  const item = slot ? fx.devices[slot.device] : null;
+  const cap = item ? fxCard(slot.device)?.querySelector(".fx-viz-cap") : null;
+  if (cap) cap.textContent = window.FxViz?.caption(item.kind) || "";
+}
+
+function clearFxLive() {
+  window.clearTimeout(fx.liveTimer);
+  fx.liveTimer = 0;
+  const previous = fx.live != null ? fx.macros[fx.live] : null;
+  document.querySelectorAll(".fx-param.live, .fx-card.live, .fx-viz-wrap.live, .fx-knob.turning").forEach((el) => {
+    el.classList.remove("live", "turning");
+  });
+  $("fx")?.classList.remove("scrubbing");
+  if (previous) restoreFxCaption(previous);
+  fx.live = null;
+}
+
+function showFxLive(slot, opts) {
+  if (!slot?.param) return;
+  window.clearTimeout(fx.liveTimer);
+  fx.liveTimer = 0;
+  if (fx.live !== slot.index) {
+    const previous = fx.live != null ? fx.macros[fx.live] : null;
+    document.querySelectorAll(".fx-param.live, .fx-card.live, .fx-viz-wrap.live, .fx-knob.turning").forEach((el) => {
+      el.classList.remove("live", "turning");
+    });
+    if (previous && previous !== slot) restoreFxCaption(previous);
+  }
+  fx.live = slot.index;
+  $("fx")?.classList.add("scrubbing");
+  const card = fxCard(slot.device);
+  const wrap = fxParamEl(slot.device, slot.param);
+  card?.classList.add("live");
+  wrap?.classList.add("live");
+  card?.querySelector(".fx-viz-wrap")?.classList.add("live");
+  document.querySelector(`[data-fx-knob="${slot.index}"]`)?.classList.add("turning");
+  const more = wrap?.closest("details.fx-more");
+  if (more) more.open = true;
+  if (opts?.scroll) wrap?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  updateFxLiveCaption(slot);
+  updateFxHint();
+}
+
+function fadeFxLive() {
+  window.clearTimeout(fx.liveTimer);
+  fx.liveTimer = window.setTimeout(() => {
+    if (fx.scrubbing) return;
+    clearFxLive();
+    updateFxHint();
+  }, 420);
+}
+
+function fxMacroSource(slot) {
+  if (!slot.param) return "";
+  const item = fx.devices[slot.device];
+  const spec = item ? fxParamSpec(item.kind, slot.param) : null;
+  const device = item ? (fxSpec(item.kind)?.name || item.kind) : "";
+  return spec ? `${device} · ${spec.label}` : device;
+}
+
+function clearFxMacro(slot) {
+  slot.param = "";
+  slot.name = "";
+  slot.min = null;
+  slot.max = null;
+  slot.device = 0;
+}
+
+function setFxArm(index) {
+  fx.arm = fx.arm === index ? null : index;
+  $("fx").classList.toggle("mapping", fx.arm != null);
+  renderFxMacros();
+  updateFxHint();
+}
+
+function mapArmedMacro(deviceIndex, spec) {
+  if (fx.arm == null) return;
+  if (spec.id === "Enabled" || spec.type === "enum") {
+    toast("That control cannot be mapped", "error");
+    return;
+  }
+  const slot = fx.macros[fx.arm];
+  for (const other of fx.macros) {
+    if (other !== slot && other.device === deviceIndex && other.param === spec.id) {
+      clearFxMacro(other);
+    }
+  }
+  slot.name = "";
+  slot.min = null;
+  slot.max = null;
+  applyFxMacroParam(slot, deviceIndex, spec.id);
+  fx.arm = null;
+  $("fx").classList.remove("mapping");
+  renderFxChain();
+}
+
+function updateFxKnobDials() {
+  for (const slot of fx.macros) {
+    const el = document.querySelector(`[data-fx-knob="${slot.index}"]`);
+    if (!el) continue;
+    el.style.setProperty("--rot", `${fxKnobRotation(slot)}deg`);
+    el.style.setProperty("--pos", String(fxMacroPosition(slot)));
+    const readout = el.querySelector(".fx-knob-val");
+    if (readout) readout.textContent = slot.param ? fxMacroValueText(slot) : "";
+    if (slot.param) {
+      el.setAttribute("aria-valuenow", String(Math.round(fxMacroPosition(slot) * 1000) / 1000));
+    } else {
+      el.removeAttribute("aria-valuenow");
+    }
+  }
+}
+
+function disarmFxKnobs() {
+  fx.arm = null;
+  $("fx")?.classList.remove("mapping");
+  document.querySelectorAll(".fx-knob.armed").forEach((el) => el.classList.remove("armed"));
+}
+
+function bindFxKnobGestures(wrap, slot) {
+  let clickTimer = 0;
+  let pointer = null;
+
+  wrap.onpointerdown = (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest(".fx-knob-name")) return;
+    pointer = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      pos: fxMacroPosition(slot),
+      moved: false,
+    };
+    try { wrap.setPointerCapture(event.pointerId); } catch { /* tests / older browsers */ }
+    if (slot.param) showFxLive(slot, { scroll: true });
+  };
+
+  wrap.onpointermove = (event) => {
+    if (!pointer || event.pointerId !== pointer.id) return;
+    const dx = event.clientX - pointer.x;
+    const dy = event.clientY - pointer.y;
+    if (!pointer.moved && (dx * dx + dy * dy) < 25) return;
+    pointer.moved = true;
+    if (!slot.param) return;
+    event.preventDefault();
+    window.clearTimeout(clickTimer);
+    if (fx.arm != null) disarmFxKnobs();
+    fx.scrubbing = true;
+    const scale = event.shiftKey ? 420 : 128;
+    setFxMacroPosition(slot, pointer.pos + (-dy + dx * 0.28) / scale);
+    showFxLive(slot, { scroll: true });
+  };
+
+  const endPointer = (event) => {
+    if (!pointer || (event && event.pointerId !== pointer.id)) return;
+    const moved = pointer.moved;
+    pointer = null;
+    fx.scrubbing = false;
+    try { wrap.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+    if (moved) {
+      window.clearTimeout(clickTimer);
+      fadeFxLive();
+      return;
+    }
+    if (slot.param) fadeFxLive();
+    else clearFxLive();
+    window.clearTimeout(clickTimer);
+    clickTimer = window.setTimeout(() => setFxArm(slot.index), 200);
+  };
+    wrap.onpointerup = endPointer;
+    wrap.onpointercancel = endPointer;
+    wrap.onpointerenter = () => {
+      if (fx.scrubbing || fx.arm != null || !slot.param) return;
+      showFxLive(slot);
+    };
+    wrap.onpointerleave = () => {
+      if (fx.scrubbing || fx.live !== slot.index) return;
+      fadeFxLive();
+    };
+
+  wrap.ondblclick = (event) => {
+    event.preventDefault();
+    window.clearTimeout(clickTimer);
+    fx.scrubbing = false;
+    clearFxMacro(slot);
+    if (fx.arm === slot.index) fx.arm = null;
+    renderFxChain();
+  };
+  wrap.oncontextmenu = (event) => {
+    event.preventDefault();
+    window.clearTimeout(clickTimer);
+    fx.scrubbing = false;
+    clearFxMacro(slot);
+    if (fx.arm === slot.index) fx.arm = null;
+    renderFxChain();
+  };
+  wrap.onkeydown = (event) => {
+    if (event.target.closest(".fx-knob-name")) return;
+    const nudge = event.shiftKey ? 0.012 : 0.045;
+    if (slot.param && (event.key === "ArrowUp" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      showFxLive(slot, { scroll: true });
+      setFxMacroPosition(slot, fxMacroPosition(slot) + nudge);
+      fadeFxLive();
+      return;
+    }
+    if (slot.param && (event.key === "ArrowDown" || event.key === "ArrowLeft")) {
+      event.preventDefault();
+      showFxLive(slot, { scroll: true });
+      setFxMacroPosition(slot, fxMacroPosition(slot) - nudge);
+      fadeFxLive();
+      return;
+    }
+    if (slot.param && event.key === "Home") {
+      event.preventDefault();
+      showFxLive(slot, { scroll: true });
+      setFxMacroPosition(slot, 0);
+      fadeFxLive();
+      return;
+    }
+    if (slot.param && event.key === "End") {
+      event.preventDefault();
+      showFxLive(slot, { scroll: true });
+      setFxMacroPosition(slot, 1);
+      fadeFxLive();
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setFxArm(slot.index);
+    }
+  };
+}
+
+function renderFxMacros() {
+  const row = $("fx-macros");
+  if (!row) return;
+  row.innerHTML = "";
+  $("fx").classList.toggle("mapping", fx.arm != null);
+  fx.macros.forEach((slot) => {
+    const wrap = document.createElement("div");
+    wrap.className = "fx-knob"
+      + (slot.param ? " mapped" : "")
+      + (fx.arm === slot.index ? " armed" : "")
+      + (fx.live === slot.index ? " turning" : "");
+    wrap.dataset.fxKnob = String(slot.index);
+    wrap.style.setProperty("--rot", `${fxKnobRotation(slot)}deg`);
+    wrap.style.setProperty("--pos", String(fxMacroPosition(slot)));
+    wrap.tabIndex = 0;
+    if (slot.param) {
+      wrap.setAttribute("role", "slider");
+      wrap.setAttribute("aria-valuemin", "0");
+      wrap.setAttribute("aria-valuemax", "1");
+      wrap.setAttribute("aria-valuenow", String(Math.round(fxMacroPosition(slot) * 1000) / 1000));
+      wrap.setAttribute("aria-label", `Macro ${slot.index + 1} ${slot.name || fxMacroSource(slot)}`);
+      wrap.title = `${fxMacroSource(slot)}. Drag to turn, click to remap, double-click to clear.`;
+    } else {
+      wrap.setAttribute("role", "button");
+      wrap.setAttribute("aria-label", `Macro ${slot.index + 1}, unmapped`);
+      wrap.title = "Click, then click a control to map this knob.";
+    }
+
+    const dial = document.createElement("div");
+    dial.className = "fx-knob-dial";
+    const arc = document.createElement("span");
+    arc.className = "fx-knob-arc";
+    const notch = document.createElement("span");
+    notch.className = "fx-knob-notch";
+    const num = document.createElement("span");
+    num.className = "fx-knob-n";
+    num.textContent = String(slot.index + 1).padStart(2, "0");
+    dial.append(arc, notch, num);
+
+    const value = document.createElement("span");
+    value.className = "fx-knob-val";
+    value.textContent = slot.param ? fxMacroValueText(slot) : "";
+
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "fx-knob-name";
+    name.maxLength = 24;
+    name.placeholder = "—";
+    name.value = slot.name;
+    name.onclick = (event) => event.stopPropagation();
+    name.ondblclick = (event) => event.stopPropagation();
+    name.onpointerdown = (event) => event.stopPropagation();
+    name.oninput = () => { slot.name = name.value; };
+
+    bindFxKnobGestures(wrap, slot);
+
+    wrap.append(dial, value, name);
+    row.append(wrap);
+  });
+}
+
+async function openFxBuilder() {
+  try {
+    if (!fx.catalog) {
+      const data = await api("/api/effects/catalog");
+      fx.catalog = data.effects;
+    }
+  } catch (error) {
+    toast(error.message, "error");
+    return;
+  }
+  fx.devices = [];
+  fx.macros = emptyFxMacros();
+  fx.arm = null;
+  fx.scrubbing = false;
+  clearFxLive();
+  $("fx").classList.remove("mapping");
+  $("fx-name").value = "My Effect";
+  updateFxHint();
+  renderFxAdder();
+  renderFxChain();
+  $("fx").showModal();
+}
+
+function fxPayload(output) {
+  return {
+    name: $("fx-name").value.trim(),
+    folder: destFolder(),
+    output,
+    devices: fx.devices.map((item) => ({ kind: item.kind, parameters: item.parameters })),
+    macros: fx.macros
+      .filter((slot) => slot.param)
+      .map((slot) => ({
+        index: slot.index,
+        name: slot.name,
+        device: slot.device,
+        param: slot.param,
+        min: slot.min,
+        max: slot.max,
+      })),
+  };
+}
+
+$("btn-fx").onclick = openFxBuilder;
+$("fx-cancel").onclick = () => {
+  fx.arm = null;
+  fx.scrubbing = false;
+  clearFxLive();
+  $("fx").close();
+};
+$("fx").addEventListener("cancel", (event) => {
+  if (fx.arm == null && !fx.scrubbing && fx.live == null) return;
+  event.preventDefault();
+  fx.arm = null;
+  fx.scrubbing = false;
+  clearFxLive();
+  $("fx").classList.remove("mapping");
+  renderFxMacros();
+  updateFxHint();
+});
+$("fx-macros-fill").onclick = fillFxMacrosFromChain;
+
+$("fx-save").onclick = async () => {
+  const payload = fxPayload("device");
+  if (!payload.name) {
+    $("fx-hint").textContent = "Give the effect a name first";
+    return;
+  }
+  if (!payload.devices.length) {
+    $("fx-hint").textContent = "Add at least one effect";
+    return;
+  }
+  try {
+    const result = await apiJson("/api/effects/build", payload);
+    $("fx").close();
+    toast(`Saved ${result.name}`, "ok");
+    if (!result.refreshed) {
+      toast("Saved, but library refresh failed — restart Move to see it", "error");
+    }
+    if (state.kind === "effects") await load();
+  } catch (error) {
+    $("fx-hint").textContent = error.message;
+  }
+};
+
+$("fx-download").onclick = async () => {
+  const payload = fxPayload("file");
+  if (!payload.name) {
+    $("fx-hint").textContent = "Give the effect a name first";
+    return;
+  }
+  if (!payload.devices.length) {
+    $("fx-hint").textContent = "Add at least one effect";
+    return;
+  }
+  try {
+    const response = await fetch("/api/effects/build", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `failed (${response.status})`);
+    }
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${payload.name}.ablpreset`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    $("fx").close();
+    toast("Effect downloaded", "ok");
+  } catch (error) {
+    $("fx-hint").textContent = error.message;
   }
 };
 

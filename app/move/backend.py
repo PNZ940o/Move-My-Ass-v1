@@ -8,6 +8,7 @@ tested without the hardware attached.
 from __future__ import annotations
 
 import posixpath
+import shlex
 import shutil
 import stat
 from abc import ABC, abstractmethod
@@ -61,6 +62,9 @@ class MoveBackend(ABC):
     def rename(self, src: str, dst: str) -> None: ...
 
     @abstractmethod
+    def copy_tree(self, src: str, dst: str) -> None: ...
+
+    @abstractmethod
     def exists(self, path: str) -> bool: ...
 
     @abstractmethod
@@ -73,7 +77,7 @@ class MoveBackend(ABC):
     def read_range(self, path: str, offset: int, length: int) -> bytes: ...
 
     @abstractmethod
-    def run(self, command: str) -> CommandResult: ...
+    def run(self, command: str, timeout: float = 20.0) -> CommandResult: ...
 
     def refresh_library(self) -> CommandResult:
         return self.run(paths.REFRESH_CACHE_CMD)
@@ -135,6 +139,12 @@ class LocalBackend(MoveBackend):
         target.parent.mkdir(parents=True, exist_ok=True)
         self._local(src).rename(target)
 
+    def copy_tree(self, src: str, dst: str) -> None:
+        target = self._local(dst)
+        if target.exists():
+            raise FileExistsError(dst)
+        shutil.copytree(self._local(src), target)
+
     def exists(self, path: str) -> bool:
         return self._local(path).exists()
 
@@ -149,7 +159,7 @@ class LocalBackend(MoveBackend):
             handle.seek(offset)
             return handle.read(length)
 
-    def run(self, command: str) -> CommandResult:
+    def run(self, command: str, timeout: float = 20.0) -> CommandResult:
         return CommandResult(0, "", "mock backend: command skipped")
 
     def refresh_library(self) -> CommandResult:
@@ -243,6 +253,14 @@ class SftpBackend(MoveBackend):
         self.makedirs(posixpath.dirname(dst))
         self._sftp.posix_rename(src, dst)
 
+    def copy_tree(self, src: str, dst: str) -> None:
+        if self.exists(dst):
+            raise FileExistsError(dst)
+        result = self.run(f"cp -a {shlex.quote(src)} {shlex.quote(dst)}", timeout=180)
+        if not result.ok:
+            detail = (result.stderr or result.stdout or "copy failed").strip()
+            raise RuntimeError(detail)
+
     def exists(self, path: str) -> bool:
         try:
             self._sftp.stat(path)
@@ -270,8 +288,8 @@ class SftpBackend(MoveBackend):
             handle.prefetch(offset + length)
             return handle.read(length)
 
-    def run(self, command: str) -> CommandResult:
-        _, stdout, stderr = self._client.exec_command(command, timeout=20)
+    def run(self, command: str, timeout: float = 20.0) -> CommandResult:
+        _, stdout, stderr = self._client.exec_command(command, timeout=timeout)
         out = stdout.read().decode("utf-8", "replace")
         err = stderr.read().decode("utf-8", "replace")
         return CommandResult(stdout.channel.recv_exit_status(), out, err)

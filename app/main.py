@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from .config import PROJECT_ROOT
-from .move import kits, library, paths, sets
+from .move import effects, kits, library, paths, sets
 from .move.backend import MoveBackend
 from .move.pad_colors import PAD_COLORS, hex_color
 from .move.paths import UnsafePath
@@ -227,6 +227,30 @@ async def change_set_color(body: SetColorRequest):
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"ok": True, "color_id": color_id, "color": hex_color(color_id)}
+
+
+class CopySetRequest(BaseModel):
+    path: str
+    pad: int | None = None
+
+
+@app.post("/api/copy-set")
+async def copy_set(body: CopySetRequest):
+    """Duplicate a set onto an empty pad, or off the grid when pad is omitted."""
+    try:
+        if body.pad is None:
+            copied = sets.copy_off_grid(get_backend(), body.path)
+        else:
+            copied = sets.copy_to_pad(get_backend(), body.path, body.pad)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True, **copied}
 
 
 class MoveRequest(BaseModel):
@@ -621,6 +645,80 @@ async def kit_build(body: KitBuildRequest):
         "ok": True,
         "path": target,
         "filled_pads": sum(1 for p, _, _ in sources if p),
+        "refreshed": refresh_result.ok,
+        "refresh_error": None if refresh_result.ok else refresh_result.stderr.strip(),
+    }
+
+
+class EffectDeviceRequest(BaseModel):
+    kind: str
+    parameters: dict = {}
+
+
+class EffectMacroRequest(BaseModel):
+    index: int
+    name: str = ""
+    device: int = 0
+    param: str = ""
+    min: float | None = None
+    max: float | None = None
+
+
+class EffectBuildRequest(BaseModel):
+    name: str
+    folder: str = ""
+    output: str = "device"
+    devices: list[EffectDeviceRequest] = []
+    macros: list[EffectMacroRequest] = []
+
+
+@app.get("/api/effects/catalog")
+async def effect_catalog():
+    return {"effects": effects.catalog()}
+
+
+@app.post("/api/effects/build")
+async def effect_build(body: EffectBuildRequest):
+    name = _safe_filename(body.name)
+    try:
+        preset = effects.build_preset(
+            name,
+            [{"kind": item.kind, "parameters": item.parameters} for item in body.devices],
+            [
+                {
+                    "index": item.index,
+                    "name": item.name,
+                    "device": item.device,
+                    "param": item.param,
+                    "min": item.min,
+                    "max": item.max,
+                }
+                for item in body.macros
+            ],
+        )
+    except effects.EffectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    payload = json.dumps(preset, indent=2).encode("utf-8")
+    filename = f"{name}.ablpreset"
+    if body.output == "file":
+        return Response(
+            content=payload,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    backend = get_backend()
+    target = paths.resolve("effects", effects.dest_path(body.folder, name))
+    if backend.exists(target):
+        raise HTTPException(status_code=409, detail=f"{filename} already exists")
+    backend.write_file(target, payload)
+    refresh_result = backend.refresh_library()
+    return {
+        "ok": True,
+        "path": paths.relative_to("effects", target),
+        "name": filename,
+        "devices": len(body.devices),
         "refreshed": refresh_result.ok,
         "refresh_error": None if refresh_result.ok else refresh_result.stderr.strip(),
     }
