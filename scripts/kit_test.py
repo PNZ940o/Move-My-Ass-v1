@@ -135,6 +135,33 @@ check("chosen return is delay",
       swap_devices[0]["returnChains"][0]["devices"][0]["kind"])
 check("chosen insert is chorus", swap_devices[1]["kind"] == "chorus", swap_devices[1]["kind"])
 
+filtered = kits.build_preset("Filter", pads, "drum", insert_effect="autoFilter")
+check("auto filter is a kit insert",
+      filtered["chains"][0]["devices"][1]["kind"] == "autoFilter",
+      filtered["chains"][0]["devices"][1].get("kind"))
+check("new effects are in the kit menu",
+      {"autoFilter", "autoPan", "autoShift", "erosion"} <= set(kits.EFFECT_KINDS),
+      sorted(kits.EFFECT_KINDS))
+
+rack = {
+    "kind": "audioEffectRack",
+    "name": "Space Echo",
+    "parameters": {"Enabled": True},
+    "chains": [],
+}
+with_preset = kits.build_preset("Preset Kit", pads, "drum", insert_effect=rack)
+check("insert can be a saved preset rack",
+      with_preset["chains"][0]["devices"][1]["kind"] == "audioEffectRack",
+      with_preset["chains"][0]["devices"][1].get("kind"))
+loaded = kits.device_from_preset(
+    json.dumps({"$schema": "x", "kind": "audioEffectRack", "name": "Loaded"}).encode(),
+    "Folder/Loaded.ablpreset",
+)
+check("loaded preset drops the schema", "$schema" not in loaded, loaded)
+check("loaded preset keeps its uri",
+      loaded["presetUri"] == "ableton:/user-library/Audio Effects/Folder/Loaded.ablpreset",
+      loaded["presetUri"])
+
 try:
     kits.build_preset("Bad", pads, "drum", return_effect="nope")
     check("unknown effect refused", False, "did not raise")

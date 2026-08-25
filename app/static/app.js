@@ -263,6 +263,14 @@ function destFolder() {
   return state.path;
 }
 
+function isFxPreset(item) {
+  return Boolean(item && !item.is_dir && /\.ablpreset$/i.test(item.name || ""));
+}
+
+function isTrackPreset(item) {
+  return Boolean(item && !item.is_dir && /\.ablpreset$/i.test(item.name || ""));
+}
+
 function isFactory() {
   return state.kind === "factory";
 }
@@ -405,7 +413,6 @@ function drawWaveform(canvas, peaks, options = {}) {
   if (!canvas || !peaks?.length) return;
   const start = options.start ?? 0;
   const end = Math.min(1, options.end ?? 1);
-  const progress = options.progress;
   const { ctx, width, height } = sizeCanvas(canvas, options.width, options.height);
   ctx.clearRect(0, 0, width, height);
 
@@ -415,16 +422,37 @@ function drawWaveform(canvas, peaks, options = {}) {
   const mid = height / 2;
   const gap = slice.length > width ? 0 : 0.35;
   const bar = Math.max(1, width / slice.length);
-  const playedX = Number.isFinite(progress) ? progress * width : -1;
   const played = options.played || "rgba(255, 61, 245, 0.95)";
   const rest = options.color || "rgba(0, 229, 255, 0.82)";
+  const hiStart = options.highlightStart;
+  const hiEnd = options.highlightEnd;
+  const span = Math.max(1e-6, end - start);
+  let progress = options.progress;
+  if (Number.isFinite(options.absProgress)) {
+    const t = (options.absProgress - start) / span;
+    progress = t >= 0 && t <= 1 ? t : undefined;
+  }
+  const playedX = Number.isFinite(progress) ? progress * width : -1;
 
   for (let i = 0; i < slice.length; i++) {
     const amp = slice[i];
     const h = Math.max(1.2, amp * (height - 4) * 0.92);
     const x = i * bar;
-    ctx.fillStyle = playedX >= 0 && x < playedX ? played : rest;
+    const at = start + ((i + 0.5) / slice.length) * span;
+    const highlighted = Number.isFinite(hiStart) && Number.isFinite(hiEnd) && at >= hiStart && at < hiEnd;
+    ctx.fillStyle = playedX >= 0 && x < playedX
+      ? played
+      : highlighted
+        ? "rgba(0, 229, 255, 1)"
+        : rest;
     ctx.fillRect(x, mid - h / 2, Math.max(0.8, bar - gap), h);
+  }
+
+  if (Number.isFinite(hiStart) && Number.isFinite(hiEnd)) {
+    const x = ((hiStart - start) / span) * width;
+    const w = ((hiEnd - hiStart) / span) * width;
+    ctx.fillStyle = "rgba(0, 229, 255, 0.08)";
+    ctx.fillRect(x, 0, w, height);
   }
 
   if (options.slices) {
@@ -436,7 +464,9 @@ function drawWaveform(canvas, peaks, options = {}) {
     }
     const active = options.activeBoundary;
     for (let i = 0; i < bounds.length; i++) {
-      const x = Math.round(Math.max(0, Math.min(width - 1, bounds[i] * width)));
+      const t = (bounds[i] - start) / span;
+      if (t < -0.02 || t > 1.02) continue;
+      const x = Math.round(Math.max(0, Math.min(width - 1, t * width)));
       ctx.fillStyle = i === active ? "rgba(255, 61, 245, 0.95)" : "rgba(255, 61, 245, 0.72)";
       ctx.fillRect(x - 1, 0, 2, height);
       ctx.fillRect(Math.max(0, x - 4), 0, 8, 7);
@@ -845,6 +875,22 @@ function makeRow(item, depth) {
       event.preventDefault();
       cancelPendingRename();
       toggleFolder(item.path);
+    });
+  } else if (state.kind === "effects" && isFxPreset(item)) {
+    tr.addEventListener("dblclick", (event) => {
+      if (event.target.closest("input[type=checkbox], .name-edit")) return;
+      event.preventDefault();
+      cancelPendingRename();
+      selectOnly(item.path);
+      openFxEditor(item.path);
+    });
+  } else if (state.kind === "presets" && isTrackPreset(item)) {
+    tr.addEventListener("dblclick", (event) => {
+      if (event.target.closest("input[type=checkbox], .name-edit")) return;
+      event.preventDefault();
+      cancelPendingRename();
+      selectOnly(item.path);
+      openPresetEditor(item.path);
     });
   }
 
@@ -1436,22 +1482,29 @@ function renderSelection() {
 
   const factory = isFactory();
   const only = count === 1 ? itemByPath([...state.selected][0]) : null;
-  const audioSection = !factory && (state.kind === "samples" || state.kind === "recordings");
+  const samplesSection = !factory && state.kind === "samples";
+  const recordingsSection = !factory && state.kind === "recordings";
+  const audioSection = samplesSection || recordingsSection;
   $("btn-upload").hidden = factory;
   $("btn-upload-folder").hidden = factory;
   $("btn-mkdir").hidden = factory;
   $("btn-mkdir").disabled = factory;
   $("btn-kit").hidden = !audioSection;
   $("btn-kit").disabled = !audioSection;
-  $("btn-slice").hidden = !audioSection;
-  $("btn-slice").disabled = !(audioSection && only?.category === "audio" && only.name.toLowerCase().endsWith(".wav"));
+  $("btn-slice").hidden = !samplesSection;
+  $("btn-slice").disabled = !(samplesSection && only?.category === "audio" && only.name.toLowerCase().endsWith(".wav"));
   $("toolbar-kit").hidden = !audioSection;
   const effectsSection = !factory && state.kind === "effects";
   $("toolbar-fx").hidden = !effectsSection;
+  $("btn-fx-edit").disabled = !(effectsSection && isFxPreset(only));
+  const presetsSection = !factory && state.kind === "presets";
+  $("toolbar-preset").hidden = !presetsSection;
+  $("btn-preset-edit").disabled = !(presetsSection && isTrackPreset(only));
   $("btn-rename").hidden = factory;
   $("btn-delete").hidden = factory;
-  $("btn-copy").hidden = !factory;
-  $("btn-copy").disabled = !factory || count === 0;
+  $("btn-copy").hidden = !(factory || recordingsSection);
+  $("btn-copy").disabled = !(factory || recordingsSection) || count === 0;
+  $("btn-copy").textContent = recordingsSection ? "Move to Samples" : "Copy to Samples";
   const setSelected = state.kind === "sets" && only?.category === "set";
   $("btn-color").hidden = state.kind !== "sets";
   $("btn-color").disabled = !setSelected;
@@ -1677,6 +1730,16 @@ $("btn-copy").onclick = async () => {
   const items = [...state.selected];
   if (!items.length) return;
   try {
+    if (state.kind === "recordings") {
+      const result = await apiJson("/api/move-to-samples", { kind: "recordings", items });
+      const count = result.moved.length;
+      if (count) toast(`Moved ${count} into Samples/${result.dest}`, "ok");
+      for (const failure of (result.failed || []).slice(0, 3)) {
+        toast(`${failure.name.split("/").pop()}: ${failure.error}`, "error");
+      }
+      if (count) await load();
+      return;
+    }
     const result = await apiJson("/api/copy-to-samples", { kind: "factory", items });
     const count = result.copied.length;
     if (count) toast(`Copied ${count} into Samples/${result.dest}`, "ok");
@@ -1815,63 +1878,236 @@ $("btn-download").onclick = async () => {
 
 /* ---------- kit builder ---------- */
 
-const kit = { mode: "pads", folder: "", section: "samples", available: [], pads: [], sample: null, duration: 0, slices: [], peaks: [] };
+const kit = { mode: "pads", folder: "", section: "samples", available: [], pads: [], sample: null, duration: 0, slices: [], peaks: [], hiPeaks: [] };
+
+const KIT_PAD_KEYS = ["z", "x", "c", "v", "a", "s", "d", "f", "q", "w", "e", "r", "1", "2", "3", "4"];
+const KIT_KEY_INDEX = Object.fromEntries(KIT_PAD_KEYS.map((key, index) => [key, index]));
+const kitAudio = { buffers: new Map(), voices: [], selected: null, live: null, raf: 0 };
+
+function kitSamplePath(name) {
+  if (!name) return null;
+  if (name.includes("/")) return name;
+  return [kit.folder, name].filter(Boolean).join("/");
+}
+
+function kitPadSource(index) {
+  if (kit.mode === "slices") {
+    const slice = kit.slices[index];
+    if (!slice || !kit.sample) return null;
+    return { path: kit.sample, start: slice.start, length: slice.length };
+  }
+  const sample = kit.pads[index]?.sample;
+  if (!sample) return null;
+  return { path: kitSamplePath(sample), start: 0, length: 1 };
+}
+
+function kitPreviewHref(path) {
+  return `/api/preview?kind=${encodeURIComponent(kit.section)}&path=${encodeURIComponent(path)}`;
+}
+
+async function kitAudioBuffer(path) {
+  const url = kitPreviewHref(path);
+  if (kitAudio.buffers.has(url)) return kitAudio.buffers.get(url);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`couldn't load ${path.split("/").pop()}`);
+  const data = await response.arrayBuffer();
+  const buffer = await getAudioCtx().decodeAudioData(data.slice(0));
+  kitAudio.buffers.set(url, buffer);
+  if (path === kit.sample) kit.hiPeaks = peaksFromBuffer(buffer, 2048);
+  return buffer;
+}
+
+function hushListingPlayer() {
+  try { player.pause(); } catch { /* nothing playing */ }
+}
+
+function kitVoicePlayhead(voice) {
+  if (!voice || !audioCtx) return null;
+  const elapsed = audioCtx.currentTime - voice.startedAt;
+  if (elapsed < 0 || elapsed >= voice.dur) return null;
+  return { elapsed, abs: (voice.offset + elapsed) / voice.buffer.duration, local: elapsed / voice.dur };
+}
+
+function kitAbsPlayhead() {
+  const voice = [...kitAudio.voices].reverse().find((item) => item.index === kitAudio.live)
+    || kitAudio.voices[kitAudio.voices.length - 1];
+  return kitVoicePlayhead(voice)?.abs;
+}
+
+function kitPadLocalProgress(index) {
+  const voice = [...kitAudio.voices].reverse().find((item) => item.index === index);
+  return kitVoicePlayhead(voice)?.local;
+}
+
+function syncKitPadChrome() {
+  const grid = $("padgrid");
+  if (!grid) return;
+  for (const cell of grid.children) {
+    const index = Number(cell.dataset.index);
+    cell.classList.toggle("selected", kitAudio.selected === index);
+    cell.classList.toggle("playing", kitAudio.live === index);
+  }
+}
+
+function tickKitPlay() {
+  drawKitWaves();
+  syncKitPadChrome();
+  if (kitAudio.voices.length) kitAudio.raf = requestAnimationFrame(tickKitPlay);
+  else kitAudio.raf = 0;
+}
+
+function stopKitPlayback() {
+  for (const voice of kitAudio.voices) {
+    try { voice.source.stop(); } catch { /* already stopped */ }
+  }
+  kitAudio.voices = [];
+  kitAudio.live = null;
+  cancelAnimationFrame(kitAudio.raf);
+  kitAudio.raf = 0;
+  syncKitPadChrome();
+}
+
+function resetKitAudio() {
+  stopKitPlayback();
+  kitAudio.selected = null;
+  kitAudio.buffers.clear();
+  kit.hiPeaks = [];
+}
+
+function startKitVoice(index, buffer, startNorm, lengthNorm) {
+  hushListingPlayer();
+  const ctx = getAudioCtx();
+  const offset = Math.max(0, Math.min(buffer.duration, startNorm * buffer.duration));
+  const dur = Math.max(0.02, Math.min(buffer.duration - offset, lengthNorm * buffer.duration));
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+  const voice = { source, index, startedAt: ctx.currentTime, offset, dur, buffer };
+  kitAudio.voices.push(voice);
+  while (kitAudio.voices.length > 16) {
+    const old = kitAudio.voices.shift();
+    try { old.source.stop(); } catch { /* already stopped */ }
+  }
+  kitAudio.live = index;
+  source.onended = () => {
+    kitAudio.voices = kitAudio.voices.filter((item) => item !== voice);
+    if (kitAudio.live === index && !kitAudio.voices.some((item) => item.index === index)) {
+      const last = kitAudio.voices[kitAudio.voices.length - 1];
+      kitAudio.live = last ? last.index : null;
+    }
+    syncKitPadChrome();
+    drawKitWaves();
+  };
+  source.start(0, offset, dur);
+  syncKitPadChrome();
+  if (!kitAudio.raf) tickKitPlay();
+}
+
+function focusKitPads() {
+  try { $("padgrid").focus({ preventScroll: true }); } catch { /* hidden */ }
+}
+
+async function playKitPad(index) {
+  const spec = kitPadSource(index);
+  if (!spec) return;
+  kitAudio.selected = index;
+  syncKitPadChrome();
+  drawKitWaves();
+  focusKitPads();
+  try {
+    const buffer = await kitAudioBuffer(spec.path);
+    if (!$("kit").open) return;
+    startKitVoice(index, buffer, spec.start, spec.length);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function sliceIndexAt(xNorm) {
+  for (let i = 0; i < kit.slices.length; i++) {
+    const slice = kit.slices[i];
+    const lo = slice.start;
+    const hi = slice.start + slice.length;
+    if (xNorm >= lo && xNorm < hi) return i;
+  }
+  if (kit.slices.length && xNorm >= kit.slices[kit.slices.length - 1].start) {
+    return kit.slices.length - 1;
+  }
+  return null;
+}
 
 function renderPads() {
   const grid = $("padgrid");
   grid.innerHTML = "";
 
-  for (let index = 0; index < 16; index++) {
-    const cell = document.createElement("div");
-    cell.className = "pad";
+  // Move's 4x4: pad 1 is bottom-left. CSS grid fills top-first, so emit the
+  // top row (pads 13–16) before the bottom row (pads 1–4).
+  for (let visRow = 0; visRow < 4; visRow++) {
+    const padRow = 3 - visRow;
+    for (let col = 0; col < 4; col++) {
+      const index = padRow * 4 + col;
+      const cell = document.createElement("div");
+      cell.className = "pad";
+      cell.dataset.index = String(index);
 
-    const head = document.createElement("div");
-    head.className = "pad-head";
-    head.innerHTML = `<span>${index + 1}</span>`;
+      const head = document.createElement("div");
+      head.className = "pad-head";
+      head.innerHTML = `<span>${index + 1}<kbd class="pad-key">${KIT_PAD_KEYS[index]}</kbd></span>`;
 
-    if (kit.mode === "pads") {
-      const pad = kit.pads[index] || {};
-      const role = document.createElement("span");
-      role.className = "pad-role";
-      role.textContent = pad.role || "";
-      head.append(role);
+      if (kit.mode === "pads") {
+        const pad = kit.pads[index] || {};
+        const role = document.createElement("span");
+        role.className = "pad-role";
+        role.textContent = pad.role || "";
+        head.append(role);
 
-      const select = document.createElement("select");
-      select.innerHTML = `<option value="">— empty —</option>`;
-      for (const name of kit.available) {
-        const option = document.createElement("option");
-        option.value = name;
-        option.textContent = name;
-        option.selected = name === pad.sample;
-        select.append(option);
+        const select = document.createElement("select");
+        select.innerHTML = `<option value="">— empty —</option>`;
+        for (const name of kit.available) {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          option.selected = name === pad.sample;
+          select.append(option);
+        }
+        select.onchange = () => {
+          kit.pads[index].sample = select.value || null;
+          renderPads();
+        };
+        select.onpointerdown = (event) => event.stopPropagation();
+        cell.append(head, select);
+        if (pad.sample) cell.classList.add("filled");
+      } else {
+        const slice = kit.slices[index];
+        head.innerHTML += `<span class="pad-role">${slice ? "slice" : ""}</span>`;
+        cell.append(head);
+        if (slice && kit.peaks.length) {
+          const canvas = document.createElement("canvas");
+          canvas.className = "wave-pad";
+          canvas.dataset.start = String(slice.start);
+          canvas.dataset.end = String(slice.start + slice.length);
+          cell.append(canvas);
+        }
+        const label = document.createElement("div");
+        label.className = "slice-label";
+        label.textContent = slice
+          ? `${slice.start_seconds.toFixed(2)}s → ${(slice.start_seconds + slice.length_seconds).toFixed(2)}s`
+          : "— empty —";
+        cell.append(label);
+        if (slice) cell.classList.add("filled");
       }
-      select.onchange = () => {
-        kit.pads[index].sample = select.value || null;
-        renderPads();
-      };
-      cell.append(head, select);
-      if (pad.sample) cell.classList.add("filled");
-    } else {
-      const slice = kit.slices[index];
-      head.innerHTML += `<span class="pad-role">${slice ? "slice" : ""}</span>`;
-      cell.append(head);
-      if (slice && kit.peaks.length) {
-        const canvas = document.createElement("canvas");
-        canvas.className = "wave-pad";
-        canvas.dataset.start = String(slice.start);
-        canvas.dataset.end = String(slice.start + slice.length);
-        cell.append(canvas);
+      if (kitPadSource(index)) {
+        cell.classList.add("playable");
+        cell.addEventListener("pointerdown", (event) => {
+          if (event.button && event.button !== 0) return;
+          event.preventDefault();
+          playKitPad(index);
+        });
       }
-      const label = document.createElement("div");
-      label.className = "slice-label";
-      label.textContent = slice
-        ? `${slice.start_seconds.toFixed(2)}s → ${(slice.start_seconds + slice.length_seconds).toFixed(2)}s`
-        : "— empty —";
-      cell.append(label);
-      if (slice) cell.classList.add("filled");
+      grid.append(cell);
     }
-    grid.append(cell);
   }
+  syncKitPadChrome();
   requestAnimationFrame(drawKitWaves);
 }
 
@@ -1882,23 +2118,128 @@ function drawKitWaves() {
   overview.hidden = !show;
   if (show) {
     const canvas = overview.querySelector("canvas");
-    drawWaveform(canvas, kit.peaks, {
+    const selected = kit.slices[kitAudio.selected] || null;
+    const abs = kitAbsPlayhead();
+    drawWaveform(canvas, kit.hiPeaks.length ? kit.hiPeaks : kit.peaks, {
+      start: sliceView.start,
+      end: sliceView.end,
       slices: kit.slices,
       activeBoundary: sliceEdit.boundary,
+      highlightStart: selected ? selected.start : undefined,
+      highlightEnd: selected ? selected.start + selected.length : undefined,
+      absProgress: abs,
     });
     waveResize.observe(overview);
+    updateSliceViewNav();
   }
   waveResize.observe($("padgrid"));
   for (const canvas of $("padgrid").querySelectorAll("canvas.wave-pad")) {
-    drawWaveform(canvas, kit.peaks, {
+    const index = Number(canvas.closest(".pad")?.dataset.index);
+    drawWaveform(canvas, kit.hiPeaks.length ? kit.hiPeaks : kit.peaks, {
       start: Number(canvas.dataset.start),
       end: Number(canvas.dataset.end),
+      progress: kitPadLocalProgress(index),
     });
   }
 }
 
 const MIN_SLICE = 0.004;
-const sliceEdit = { boundary: null };
+const MIN_SLICE_VIEW = 0.02;
+const sliceView = { start: 0, end: 1 };
+const sliceEdit = { boundary: null, panning: false, panX: 0 };
+
+function sliceViewSpan() {
+  return Math.max(MIN_SLICE_VIEW, sliceView.end - sliceView.start);
+}
+
+function sliceViewZoomed() {
+  return sliceView.start > 0.001 || sliceView.end < 0.999;
+}
+
+function setSliceView(start, end) {
+  let lo = Math.max(0, Math.min(1, start));
+  let hi = Math.max(0, Math.min(1, end));
+  if (hi - lo < MIN_SLICE_VIEW) {
+    const mid = (lo + hi) / 2;
+    lo = Math.max(0, mid - MIN_SLICE_VIEW / 2);
+    hi = Math.min(1, lo + MIN_SLICE_VIEW);
+    lo = Math.max(0, hi - MIN_SLICE_VIEW);
+  }
+  sliceView.start = lo;
+  sliceView.end = hi;
+  drawKitWaves();
+}
+
+function resetSliceView() {
+  sliceView.start = 0;
+  sliceView.end = 1;
+}
+
+function zoomSliceView(factor, centerNorm) {
+  const span = sliceViewSpan();
+  const next = Math.min(1, Math.max(MIN_SLICE_VIEW, span * factor));
+  if (next >= 0.999) {
+    setSliceView(0, 1);
+    return;
+  }
+  const center = Number.isFinite(centerNorm) ? centerNorm : (sliceView.start + sliceView.end) / 2;
+  const ratio = span < 1e-6 ? 0.5 : (center - sliceView.start) / span;
+  let lo = center - next * ratio;
+  let hi = lo + next;
+  if (lo < 0) {
+    lo = 0;
+    hi = next;
+  }
+  if (hi > 1) {
+    hi = 1;
+    lo = 1 - next;
+  }
+  setSliceView(lo, hi);
+}
+
+function panSliceView(deltaNorm) {
+  const span = sliceViewSpan();
+  let lo = sliceView.start + deltaNorm;
+  let hi = lo + span;
+  if (lo < 0) {
+    lo = 0;
+    hi = span;
+  }
+  if (hi > 1) {
+    hi = 1;
+    lo = 1 - span;
+  }
+  setSliceView(lo, hi);
+}
+
+function zoomSliceViewToIndex(index) {
+  const slice = kit.slices[index];
+  if (!slice) {
+    setSliceView(0, 1);
+    return;
+  }
+  const pad = Math.max(0.012, slice.length * 0.35);
+  setSliceView(slice.start - pad, slice.start + slice.length + pad);
+}
+
+function updateSliceViewNav() {
+  const nav = $("kit-overview-nav");
+  const thumb = $("kit-overview-thumb");
+  if (!nav || !thumb) return;
+  nav.hidden = !sliceViewZoomed();
+  thumb.style.left = `${sliceView.start * 100}%`;
+  thumb.style.width = `${sliceViewSpan() * 100}%`;
+}
+
+function overviewNorm(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const viewX = (event.clientX - rect.left) / Math.max(1, rect.width);
+  return {
+    viewX,
+    norm: sliceView.start + viewX * sliceViewSpan(),
+    width: rect.width,
+  };
+}
 
 function sliceBoundaryPositions() {
   const slices = kit.slices;
@@ -1939,14 +2280,15 @@ function setSliceBoundary(index, position) {
   syncSliceSeconds();
 }
 
-function nearestSliceBoundary(xNorm, pxWidth) {
+function nearestSliceBoundary(norm, pxWidth) {
   const points = sliceBoundaryPositions();
   if (!points.length) return null;
-  const threshold = Math.max(0.012, 10 / Math.max(1, pxWidth));
+  const span = sliceViewSpan();
+  const threshold = Math.max(0.008 * span, (12 / Math.max(1, pxWidth)) * span);
   let best = null;
   let bestDist = threshold;
   for (let i = 0; i < points.length; i++) {
-    const dist = Math.abs(xNorm - points[i]);
+    const dist = Math.abs(norm - points[i]);
     if (dist < bestDist) {
       bestDist = dist;
       best = i;
@@ -1956,10 +2298,10 @@ function nearestSliceBoundary(xNorm, pxWidth) {
 }
 
 function applySliceVisuals() {
-  const pads = $("padgrid").children;
-  kit.slices.forEach((slice, index) => {
-    const cell = pads[index];
-    if (!cell) return;
+  for (const cell of $("padgrid").children) {
+    const index = Number(cell.dataset.index);
+    const slice = kit.slices[index];
+    if (!slice) continue;
     const canvas = cell.querySelector("canvas.wave-pad");
     if (canvas) {
       canvas.dataset.start = String(slice.start);
@@ -1970,16 +2312,8 @@ function applySliceVisuals() {
       label.textContent =
         `${slice.start_seconds.toFixed(2)}s → ${(slice.start_seconds + slice.length_seconds).toFixed(2)}s`;
     }
-  });
+  }
   drawKitWaves();
-}
-
-function overviewX(event, canvas) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: (event.clientX - rect.left) / Math.max(1, rect.width),
-    width: rect.width,
-  };
 }
 
 function bindSliceEditor() {
@@ -1989,32 +2323,61 @@ function bindSliceEditor() {
 
   canvas.addEventListener("pointerdown", (event) => {
     if (kit.mode !== "slices" || $("kit-overview").hidden) return;
-    const { x, width } = overviewX(event, canvas);
-    const boundary = nearestSliceBoundary(x, width);
-    if (boundary == null) return;
-    event.preventDefault();
-    event.stopPropagation();
-    sliceEdit.boundary = boundary;
-    canvas.classList.add("dragging");
-    try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
-    setSliceBoundary(boundary, x);
-    applySliceVisuals();
-  });
-  canvas.addEventListener("pointermove", (event) => {
-    if (kit.mode !== "slices" || $("kit-overview").hidden) return;
-    const { x, width } = overviewX(event, canvas);
-    if (sliceEdit.boundary != null) {
+    const { viewX, norm, width } = overviewNorm(event, canvas);
+    const pan = event.shiftKey || event.button === 1 || event.altKey;
+    if (pan && sliceViewZoomed()) {
       event.preventDefault();
-      setSliceBoundary(sliceEdit.boundary, x);
+      sliceEdit.panning = true;
+      sliceEdit.panX = event.clientX;
+      canvas.classList.add("panning");
+      try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
+      return;
+    }
+    const boundary = nearestSliceBoundary(norm, width);
+    if (boundary != null) {
+      event.preventDefault();
+      event.stopPropagation();
+      sliceEdit.boundary = boundary;
+      canvas.classList.add("dragging");
+      try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
+      setSliceBoundary(boundary, norm);
       applySliceVisuals();
       return;
     }
-    canvas.style.cursor = nearestSliceBoundary(x, width) != null ? "ew-resize" : "default";
+    const index = sliceIndexAt(norm);
+    if (index == null) return;
+    event.preventDefault();
+    playKitPad(index);
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (kit.mode !== "slices" || $("kit-overview").hidden) return;
+    const { viewX, norm, width } = overviewNorm(event, canvas);
+    if (sliceEdit.panning) {
+      event.preventDefault();
+      const dx = (sliceEdit.panX - event.clientX) / Math.max(1, width);
+      sliceEdit.panX = event.clientX;
+      panSliceView(dx * sliceViewSpan());
+      return;
+    }
+    if (sliceEdit.boundary != null) {
+      event.preventDefault();
+      let next = norm;
+      if (viewX < 0.06) panSliceView(-sliceViewSpan() * 0.03);
+      else if (viewX > 0.94) panSliceView(sliceViewSpan() * 0.03);
+      const mapped = overviewNorm(event, canvas);
+      next = mapped.norm;
+      setSliceBoundary(sliceEdit.boundary, next);
+      applySliceVisuals();
+      return;
+    }
+    const onHandle = nearestSliceBoundary(norm, width) != null;
+    canvas.style.cursor = onHandle ? "ew-resize" : event.shiftKey && sliceViewZoomed() ? "grab" : "pointer";
   });
   const endDrag = (event) => {
-    if (sliceEdit.boundary == null) return;
+    if (sliceEdit.boundary == null && !sliceEdit.panning) return;
     sliceEdit.boundary = null;
-    canvas.classList.remove("dragging");
+    sliceEdit.panning = false;
+    canvas.classList.remove("dragging", "panning");
     if (canvas.hasPointerCapture?.(event.pointerId)) {
       try { canvas.releasePointerCapture(event.pointerId); } catch { /* already released */ }
     }
@@ -2022,11 +2385,136 @@ function bindSliceEditor() {
   };
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("wheel", (event) => {
+    if (kit.mode !== "slices" || $("kit-overview").hidden) return;
+    event.preventDefault();
+    const { norm } = overviewNorm(event, canvas);
+    if (event.shiftKey) {
+      panSliceView((event.deltaY || event.deltaX) * 0.001 * sliceViewSpan());
+      return;
+    }
+    zoomSliceView(event.deltaY > 0 ? 1.18 : 1 / 1.18, norm);
+  }, { passive: false });
+  canvas.addEventListener("dblclick", (event) => {
+    if (kit.mode !== "slices" || $("kit-overview").hidden) return;
+    event.preventDefault();
+    const { norm } = overviewNorm(event, canvas);
+    if (sliceViewZoomed()) setSliceView(0, 1);
+    else {
+      const index = sliceIndexAt(norm);
+      if (index != null) zoomSliceViewToIndex(index);
+      else zoomSliceView(0.25, norm);
+    }
+  });
+
+  const nav = $("kit-overview-nav");
+  const thumb = $("kit-overview-thumb");
+  if (nav && thumb && !nav.dataset.bound) {
+    nav.dataset.bound = "1";
+    nav.addEventListener("pointerdown", (event) => {
+      if (event.target === thumb) return;
+      const rect = nav.getBoundingClientRect();
+      const x = (event.clientX - rect.left) / Math.max(1, rect.width);
+      const span = sliceViewSpan();
+      setSliceView(x - span / 2, x + span / 2);
+    });
+    thumb.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      sliceEdit.panning = true;
+      sliceEdit.panX = event.clientX;
+      try { thumb.setPointerCapture(event.pointerId); } catch { /* synthetic */ }
+    });
+    thumb.addEventListener("pointermove", (event) => {
+      if (!sliceEdit.panning || sliceEdit.boundary != null) return;
+      const rect = nav.getBoundingClientRect();
+      const dx = (event.clientX - sliceEdit.panX) / Math.max(1, rect.width);
+      sliceEdit.panX = event.clientX;
+      panSliceView(dx);
+    });
+    const endPan = (event) => {
+      if (!sliceEdit.panning) return;
+      sliceEdit.panning = false;
+      if (thumb.hasPointerCapture?.(event.pointerId)) {
+        try { thumb.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+      }
+    };
+    thumb.addEventListener("pointerup", endPan);
+    thumb.addEventListener("pointercancel", endPan);
+  }
 }
 
-function resetKitEffects() {
-  $("kit-return-fx").value = "reverb";
-  $("kit-insert-fx").value = "saturator";
+async function ensureFxCatalog() {
+  if (fx.catalog) return;
+  const data = await api("/api/effects/catalog");
+  fx.catalog = data.effects;
+}
+
+function kitFxOption(value, label, selected) {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = label;
+  if (selected) option.selected = true;
+  return option;
+}
+
+function populateKitFxSelect(select, selected, presets) {
+  const specs = fx.catalog && fx.catalog.length
+    ? fx.catalog
+    : [
+        { kind: "reverb", name: "Reverb" },
+        { kind: "delay", name: "Delay" },
+        { kind: "autoFilter", name: "Auto Filter" },
+        { kind: "chorus", name: "Chorus-Ensemble" },
+        { kind: "phaser", name: "Phaser-Flanger" },
+        { kind: "autoPan", name: "Auto Pan" },
+        { kind: "autoShift", name: "Auto Shift" },
+        { kind: "erosion", name: "Erosion" },
+        { kind: "saturator", name: "Saturator" },
+        { kind: "channelEq", name: "Channel EQ" },
+        { kind: "compressor", name: "Compressor" },
+        { kind: "limiter", name: "Limiter" },
+        { kind: "redux2", name: "Redux" },
+      ];
+  select.innerHTML = "";
+  select.append(kitFxOption("", "Off", selected === ""));
+  const devices = document.createElement("optgroup");
+  devices.label = "Devices";
+  for (const spec of specs) {
+    devices.append(kitFxOption(spec.kind, spec.name, spec.kind === selected));
+  }
+  select.append(devices);
+  const presetsGroup = document.createElement("optgroup");
+  presetsGroup.label = "Presets";
+  if (presets.length) {
+    for (const preset of presets) {
+      const value = "preset:" + preset.path;
+      presetsGroup.append(kitFxOption(value, preset.label || preset.name, value === selected));
+    }
+  } else {
+    const empty = kitFxOption("", "No saved presets", false);
+    empty.disabled = true;
+    presetsGroup.append(empty);
+  }
+  select.append(presetsGroup);
+  select.value = selected;
+}
+
+async function fillKitFxSelects() {
+  try {
+    await ensureFxCatalog();
+  } catch (error) {
+    if (!fx.catalog) toast(error.message, "error");
+  }
+  let presets = [];
+  try {
+    const data = await api("/api/effects/presets");
+    presets = data.presets || [];
+  } catch {
+    presets = [];
+  }
+  populateKitFxSelect($("kit-return-fx"), "reverb", presets);
+  populateKitFxSelect($("kit-insert-fx"), "saturator", presets);
 }
 
 async function openKitFromFolder() {
@@ -2052,13 +2540,16 @@ async function openKitFromFolder() {
     $("kit-slice-controls").hidden = true;
     $("kit-overview").hidden = true;
     kit.peaks = [];
-    resetKitEffects();
+    resetKitAudio();
+    await fillKitFxSelects();
     const placed = plan.pads.filter((p) => p.sample).length;
     $("kit-hint").textContent =
       `${placed} of 16 pads filled from ${plan.available.length} samples` +
-      (plan.unplaced.length ? ` · ${plan.unplaced.length} didn't fit` : "");
+      (plan.unplaced.length ? ` · ${plan.unplaced.length} didn't fit` : "") +
+      " · Z X C V A S D F Q W E R 1 2 3 4 to play";
     renderPads();
     $("kit").showModal();
+    focusKitPads();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -2067,17 +2558,21 @@ async function openKitFromFolder() {
 async function loadSlicePlan() {
   const count = Number($("kit-slices").value);
   $("slice-count-label").textContent = count;
+  stopKitPlayback();
   try {
     const plan = await apiJson("/api/kit/plan-slices", { sample: kit.sample, count, section: kit.section });
     kit.duration = plan.duration;
     kit.slices = plan.slices;
+    if (kitAudio.selected != null && kitAudio.selected >= kit.slices.length) kitAudio.selected = null;
     const fromPreview = preview.peaks?.length && previewUrl({ path: kit.sample }) === preview.url;
     kit.peaks = plan.peaks?.length ? plan.peaks : fromPreview ? preview.peaks : [];
     $("kit-slice-info").textContent =
-      `${plan.duration.toFixed(2)}s sample · ${(plan.duration / count).toFixed(3)}s per slice`;
+      `${plan.duration.toFixed(2)}s · ${(plan.duration / count).toFixed(3)}s each`;
+    $("kit-slice-info").classList.remove("error");
     renderPads();
   } catch (error) {
     $("kit-slice-info").textContent = error.message;
+    $("kit-slice-info").classList.add("error");
     kit.slices = [];
     kit.peaks = [];
     renderPads();
@@ -2085,6 +2580,10 @@ async function loadSlicePlan() {
 }
 
 async function openKitFromSample() {
+  if (state.kind !== "samples") {
+    toast("Slice kits from Samples — move the recording there first", "error");
+    return;
+  }
   const [path] = [...state.selected];
   kit.mode = "slices";
   kit.sample = path;
@@ -2095,22 +2594,47 @@ async function openKitFromSample() {
   $("kit-name").value = path.split("/").pop().replace(/\.[^.]+$/, "") + " Slices";
   $("kit-slice-controls").hidden = false;
   $("kit-hint").textContent =
-    "Drag the magenta markers to move start and end. Neighbours stay joined — no audio is cut.";
-  resetKitEffects();
+    "Scroll the wave to zoom, Shift-drag to pan, drag magenta handles to set start and end. Play with Z X C V · A S D F · Q W E R · 1 2 3 4.";
+  resetKitAudio();
+  resetSliceView();
+  await fillKitFxSelects();
   await loadSlicePlan();
   $("kit").showModal();
   bindSliceEditor();
+  focusKitPads();
   requestAnimationFrame(() => requestAnimationFrame(drawKitWaves));
+  kitAudioBuffer(kit.sample).then(() => drawKitWaves()).catch(() => {});
 }
 
 $("kit-slices").oninput = () => {
   $("slice-count-label").textContent = $("kit-slices").value;
 };
 $("kit-slices").onchange = loadSlicePlan;
+function zoomFromButton(fn) {
+  fn();
+  focusKitPads();
+}
+$("kit-zoom-in").onclick = () => zoomFromButton(() => zoomSliceView(1 / 1.6, (sliceView.start + sliceView.end) / 2));
+$("kit-zoom-out").onclick = () => zoomFromButton(() => zoomSliceView(1.6, (sliceView.start + sliceView.end) / 2));
+$("kit-zoom-fit").onclick = () => zoomFromButton(() => setSliceView(0, 1));
+$("kit-overview")?.querySelector(".kit-zoom")?.addEventListener("pointerdown", (event) => event.stopPropagation());
 
 $("btn-kit").onclick = openKitFromFolder;
 $("btn-slice").onclick = openKitFromSample;
 $("kit-cancel").onclick = () => $("kit").close();
+$("kit").addEventListener("close", () => {
+  resetKitAudio();
+  resetSliceView();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (!$("kit").open || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.target.closest("input, select, textarea")) return;
+  const index = KIT_KEY_INDEX[event.key.toLowerCase()];
+  if (index == null) return;
+  event.preventDefault();
+  playKitPad(index);
+});
 
 function kitPayload(output) {
   return {
@@ -2181,7 +2705,7 @@ $("kit-download").onclick = async () => {
 /* ---------- effect builder ---------- */
 
 const FX_MAX = 8;
-const fx = { catalog: null, devices: [], macros: emptyFxMacros(), arm: null, live: null, scrubbing: false, liveTimer: 0 };
+const fx = { catalog: null, devices: [], macros: emptyFxMacros(), arm: null, live: null, scrubbing: false, liveTimer: 0, editPath: "", editFolder: "", mode: "effect", instrument: null, instruments: [] };
 
 function emptyFxMacros() {
   return Array.from({ length: 8 }, (_, index) => ({
@@ -2221,6 +2745,10 @@ function updateFxHint() {
       : `Turning knob ${(slot?.index ?? 0) + 1}`;
   } else if (fx.arm != null) {
     hint.textContent = `Click a control to map knob ${fx.arm + 1}. Escape cancels.`;
+  } else if (fx.mode === "preset" && !fx.instrument) {
+    hint.textContent = "Pick a User or Core Library instrument, or upload a preset file.";
+  } else if (fx.mode === "preset" && !fx.devices.length) {
+    hint.textContent = "Instrument loaded. Add effects to stack, then click a knob to map it — or save to copy it into Presets.";
   } else if (!fx.devices.length) {
     hint.textContent = "Add devices to the rack, then click a knob to map it.";
   } else if (fxSlotsFull()) {
@@ -2372,6 +2900,29 @@ function renderFxParamGroup(index, specs, className) {
   return params;
 }
 
+function instrumentSourceLabel(item) {
+  if (!item) return "";
+  if (item.source === "factory") return "Core Library";
+  if (item.source === "upload") return "Uploaded";
+  return "Presets";
+}
+
+function renderInstrumentCard() {
+  if (fx.mode !== "preset" || !fx.instrument) return null;
+  const card = document.createElement("div");
+  card.className = "fx-card fx-instrument-card";
+  const head = document.createElement("div");
+  head.className = "fx-card-head";
+  const title = document.createElement("strong");
+  title.textContent = fx.instrument.name || fx.instrument.kind || "Instrument";
+  const meta = document.createElement("span");
+  meta.className = "fx-instrument-meta";
+  meta.textContent = [fx.instrument.kind, instrumentSourceLabel(fx.instrument)].filter(Boolean).join(" · ");
+  head.append(title, meta);
+  card.append(head);
+  return card;
+}
+
 function renderFxCard(index, item) {
   const spec = fxSpec(item.kind);
   const card = document.createElement("div");
@@ -2454,10 +3005,20 @@ function renderFxChain() {
   if (fx.resizeObs) fx.resizeObs.disconnect();
   chain.innerHTML = "";
   chain.className = "fx-chain";
+  const instrumentCard = renderInstrumentCard();
+  if (instrumentCard) chain.append(instrumentCard);
+  if (instrumentCard && fx.devices.length) {
+    const flow = document.createElement("div");
+    flow.className = "fx-slot-flow";
+    flow.setAttribute("aria-hidden", "true");
+    chain.append(flow);
+  }
   if (!fx.devices.length) {
     const empty = document.createElement("div");
     empty.className = "fx-empty";
-    empty.innerHTML = "<strong>Empty rack</strong><span>Add an effect above. The whole chain saves as one device on Move.</span>";
+    empty.innerHTML = fx.mode === "preset"
+      ? "<strong>No effects yet</strong><span>Add effects to stack after the instrument. Macros map onto those effects.</span>"
+      : "<strong>Empty rack</strong><span>Add an effect above. The whole chain saves as one device on Move.</span>";
     chain.append(empty);
   } else {
     fx.devices.forEach((item, index) => {
@@ -2944,31 +3505,95 @@ function renderFxMacros() {
 
 async function openFxBuilder() {
   try {
-    if (!fx.catalog) {
-      const data = await api("/api/effects/catalog");
-      fx.catalog = data.effects;
-    }
+    await showFxDialog({ name: "My Effect", devices: [], macros: [], path: "", folder: "" });
   } catch (error) {
     toast(error.message, "error");
-    return;
   }
-  fx.devices = [];
+}
+
+async function openFxEditor(path) {
+  try {
+    await ensureFxCatalog();
+    const data = await api(`/api/effects/load?path=${encodeURIComponent(path)}`);
+    await showFxDialog({
+      name: data.name,
+      devices: data.devices || [],
+      macros: data.macros || [],
+      path: data.path || path,
+      folder: data.folder || "",
+    });
+    if (data.skipped?.length) {
+      toast(`Skipped ${data.skipped.length} unknown device${data.skipped.length === 1 ? "" : "s"}`, "error");
+    }
+    if (data.truncated) toast(`Only the first ${FX_MAX} devices can be edited`, "error");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function applyFxMacros(entries) {
   fx.macros = emptyFxMacros();
+  for (const entry of entries || []) {
+    const index = Number(entry.index);
+    if (!Number.isInteger(index) || index < 0 || index > 7 || !entry.param) continue;
+    fx.macros[index] = {
+      index,
+      name: entry.name || "",
+      device: Number(entry.device) || 0,
+      param: entry.param,
+      min: entry.min ?? null,
+      max: entry.max ?? null,
+    };
+  }
+}
+
+async function showFxDialog({ name, devices, macros, path, folder, mode, instrument }) {
+  await ensureFxCatalog();
+  fx.mode = mode === "preset" ? "preset" : "effect";
+  fx.instrument = instrument || null;
+  fx.devices = (devices || []).map((item) => ({
+    kind: item.kind,
+    parameters: { ...(item.parameters || {}) },
+  }));
+  applyFxMacros(macros);
   fx.arm = null;
   fx.scrubbing = false;
+  fx.editPath = path || "";
+  fx.editFolder = folder || "";
   clearFxLive();
   $("fx").classList.remove("mapping");
-  $("fx-name").value = "My Effect";
+  $("fx-name").value = name || (fx.mode === "preset" ? "My Preset" : "My Effect");
+  $("fx-name").placeholder = fx.mode === "preset" ? "My Preset" : "My Effect";
+  $("fx-save").textContent = fx.editPath ? "Save changes" : "Save to Move";
+  $("fx-instrument").hidden = fx.mode !== "preset";
+  if (fx.mode === "preset") {
+    await populateInstrumentSelect();
+    syncInstrumentSelect();
+    updateInstrumentInfo();
+  }
   updateFxHint();
   renderFxAdder();
   renderFxChain();
   $("fx").showModal();
 }
 
+function resetFxEditor() {
+  fx.arm = null;
+  fx.scrubbing = false;
+  fx.editPath = "";
+  fx.editFolder = "";
+  fx.mode = "effect";
+  fx.instrument = null;
+  clearFxLive();
+  $("fx-save").textContent = "Save to Move";
+  $("fx-instrument").hidden = true;
+}
+
 function fxPayload(output) {
-  return {
+  const base = {
     name: $("fx-name").value.trim(),
-    folder: destFolder(),
+    folder: fx.editPath ? fx.editFolder : destFolder(),
+    replace: fx.editPath || "",
     output,
     devices: fx.devices.map((item) => ({ kind: item.kind, parameters: item.parameters })),
     macros: fx.macros
@@ -2982,15 +3607,197 @@ function fxPayload(output) {
         max: slot.max,
       })),
   };
+  if (fx.mode === "preset") {
+    base.instrument = fx.instrument?.source === "upload"
+      ? { source: "upload", path: "", preset: fx.instrument.device }
+      : { source: fx.instrument?.source || "presets", path: fx.instrument?.path || "", preset: null };
+  }
+  return base;
+}
+
+function instrumentChoiceValue(item) {
+  return `${item.source}:${item.path}`;
+}
+
+async function populateInstrumentSelect() {
+  const select = $("fx-instrument-select");
+  if (!select) return;
+  try {
+    const data = await api("/api/presets/instruments");
+    fx.instruments = data.instruments || [];
+  } catch (error) {
+    fx.instruments = [];
+    toast(error.message, "error");
+  }
+  const current = fx.instrument && fx.instrument.source !== "upload" && fx.instrument.path
+    ? instrumentChoiceValue(fx.instrument)
+    : "";
+  select.innerHTML = "";
+  select.append(kitFxOption("", "Pick an instrument…", !current && fx.instrument?.source !== "upload"));
+  const groups = [
+    { source: "presets", label: "User library" },
+    { source: "factory", label: "Core Library" },
+  ];
+  for (const group of groups) {
+    const items = fx.instruments.filter((item) => item.source === group.source);
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = group.label;
+    if (!items.length) {
+      const empty = kitFxOption("", group.source === "factory" ? "No Core Library instruments" : "No user presets", false);
+      empty.disabled = true;
+      optgroup.append(empty);
+    } else {
+      for (const item of items) {
+        optgroup.append(kitFxOption(instrumentChoiceValue(item), item.label || item.name, instrumentChoiceValue(item) === current));
+      }
+    }
+    select.append(optgroup);
+  }
+  if (fx.instrument?.source === "upload") {
+    const uploaded = kitFxOption("upload:", fx.instrument.name || "Uploaded instrument", true);
+    select.append(uploaded);
+  }
+  syncInstrumentSelect();
+}
+
+function syncInstrumentSelect() {
+  const select = $("fx-instrument-select");
+  if (!select) return;
+  if (fx.instrument?.source === "upload") {
+    select.value = "upload:";
+    return;
+  }
+  select.value = fx.instrument?.path ? instrumentChoiceValue(fx.instrument) : "";
+}
+
+function updateInstrumentInfo() {
+  const info = $("fx-instrument-info");
+  if (!info) return;
+  if (!fx.instrument) {
+    info.textContent = "";
+    return;
+  }
+  info.textContent = `${instrumentSourceLabel(fx.instrument)} · ${fx.instrument.kind}`;
+}
+
+function applyLoadedInstrument(data, { keepName = false } = {}) {
+  fx.instrument = {
+    name: data.name,
+    kind: data.kind,
+    source: data.source,
+    path: data.path || "",
+    device: data.instrument,
+  };
+  fx.devices = (data.effects || []).map((item) => ({
+    kind: item.kind,
+    parameters: { ...(item.parameters || {}) },
+  }));
+  applyFxMacros(data.macros || []);
+  if (!keepName && data.name && (!$("fx-name").value || $("fx-name").value === "My Preset")) {
+    $("fx-name").value = data.name;
+  }
+  updateInstrumentInfo();
+  updateFxHint();
+  renderFxAdder();
+  renderFxChain();
+}
+
+async function loadInstrumentChoice(value) {
+  if (!value) {
+    fx.instrument = null;
+    fx.devices = [];
+    applyFxMacros([]);
+    updateInstrumentInfo();
+    updateFxHint();
+    renderFxChain();
+    return;
+  }
+  if (value === "upload:") return;
+  const split = value.indexOf(":");
+  const source = value.slice(0, split);
+  const path = value.slice(split + 1);
+  const data = await api(`/api/presets/load?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`);
+  applyLoadedInstrument(data);
+  syncInstrumentSelect();
+}
+
+async function openPresetBuilder() {
+  try {
+    await showFxDialog({
+      mode: "preset",
+      name: "My Preset",
+      devices: [],
+      macros: [],
+      path: "",
+      folder: destFolder(),
+      instrument: null,
+    });
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function openPresetEditor(path) {
+  try {
+    await ensureFxCatalog();
+    const data = await api(`/api/presets/load?source=presets&path=${encodeURIComponent(path)}`);
+    await showFxDialog({
+      mode: "preset",
+      name: data.name,
+      devices: data.effects || [],
+      macros: data.macros || [],
+      path: data.path || path,
+      folder: data.folder || "",
+      instrument: {
+        name: data.name,
+        kind: data.kind,
+        source: data.source,
+        path: data.path || path,
+        device: data.instrument,
+      },
+    });
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 $("btn-fx").onclick = openFxBuilder;
+$("btn-fx-edit").onclick = () => {
+  const [path] = [...state.selected];
+  if (path) openFxEditor(path);
+};
+$("btn-preset").onclick = openPresetBuilder;
+$("btn-preset-edit").onclick = () => {
+  const [path] = [...state.selected];
+  if (path) openPresetEditor(path);
+};
+$("fx-instrument-select").onchange = async () => {
+  try {
+    await loadInstrumentChoice($("fx-instrument-select").value);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+};
+$("fx-instrument-upload").onclick = () => $("fx-instrument-file").click();
+$("fx-instrument-file").onchange = async () => {
+  const file = $("fx-instrument-file").files?.[0];
+  $("fx-instrument-file").value = "";
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const preset = JSON.parse(text);
+    const data = await apiJson("/api/presets/parse", { preset });
+    applyLoadedInstrument(data);
+    await populateInstrumentSelect();
+  } catch (error) {
+    toast(error.message || "Could not read that preset", "error");
+  }
+};
 $("fx-cancel").onclick = () => {
-  fx.arm = null;
-  fx.scrubbing = false;
-  clearFxLive();
+  resetFxEditor();
   $("fx").close();
 };
+$("fx").addEventListener("close", resetFxEditor);
 $("fx").addEventListener("cancel", (event) => {
   if (fx.arm == null && !fx.scrubbing && fx.live == null) return;
   event.preventDefault();
@@ -3003,24 +3810,32 @@ $("fx").addEventListener("cancel", (event) => {
 });
 $("fx-macros-fill").onclick = fillFxMacrosFromChain;
 
+function fxBuildUrl() {
+  return fx.mode === "preset" ? "/api/presets/build" : "/api/effects/build";
+}
+
+function fxValidatePayload(payload) {
+  if (!payload.name) return fx.mode === "preset" ? "Give the preset a name first" : "Give the effect a name first";
+  if (fx.mode === "preset" && !fx.instrument) return "Pick an instrument first";
+  if (fx.mode !== "preset" && !payload.devices.length) return "Add at least one effect";
+  return "";
+}
+
 $("fx-save").onclick = async () => {
   const payload = fxPayload("device");
-  if (!payload.name) {
-    $("fx-hint").textContent = "Give the effect a name first";
-    return;
-  }
-  if (!payload.devices.length) {
-    $("fx-hint").textContent = "Add at least one effect";
+  const problem = fxValidatePayload(payload);
+  if (problem) {
+    $("fx-hint").textContent = problem;
     return;
   }
   try {
-    const result = await apiJson("/api/effects/build", payload);
+    const result = await apiJson(fxBuildUrl(), payload);
     $("fx").close();
     toast(`Saved ${result.name}`, "ok");
     if (!result.refreshed) {
       toast("Saved, but library refresh failed — restart Move to see it", "error");
     }
-    if (state.kind === "effects") await load();
+    if (state.kind === "effects" || state.kind === "presets") await load();
   } catch (error) {
     $("fx-hint").textContent = error.message;
   }
@@ -3028,16 +3843,13 @@ $("fx-save").onclick = async () => {
 
 $("fx-download").onclick = async () => {
   const payload = fxPayload("file");
-  if (!payload.name) {
-    $("fx-hint").textContent = "Give the effect a name first";
-    return;
-  }
-  if (!payload.devices.length) {
-    $("fx-hint").textContent = "Add at least one effect";
+  const problem = fxValidatePayload(payload);
+  if (problem) {
+    $("fx-hint").textContent = problem;
     return;
   }
   try {
-    const response = await fetch("/api/effects/build", {
+    const response = await fetch(fxBuildUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -3053,7 +3865,7 @@ $("fx-download").onclick = async () => {
     link.click();
     URL.revokeObjectURL(link.href);
     $("fx").close();
-    toast("Effect downloaded", "ok");
+    toast(fx.mode === "preset" ? "Preset downloaded" : "Effect downloaded", "ok");
   } catch (error) {
     $("fx-hint").textContent = error.message;
   }

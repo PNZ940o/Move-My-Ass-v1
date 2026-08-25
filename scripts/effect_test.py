@@ -58,6 +58,13 @@ check("decay stays 2400 under the mapping", decay["value"] == 2400, decay)
 check("decay maps to macro 1", decay["macroMapping"]["macroIndex"] == 0, decay)
 check("unused macros stay zero", mapped["parameters"]["Macro1"] == 0.0)
 
+parsed = effects.parse_preset(json.dumps(mapped).encode())
+check("parse keeps the rack name", parsed["name"] == "Macro Verb")
+check("parse restores mapped decay", parsed["devices"][0]["parameters"]["DecayTime"] == 2400)
+check("parse restores the Decay macro",
+      parsed["macros"] and parsed["macros"][0]["param"] == "DecayTime" and parsed["macros"][0]["name"] == "Decay",
+      parsed["macros"])
+
 try:
     effects.build_preset("Nope", [
         {"kind": "reverb"},
@@ -136,6 +143,22 @@ saved = json.loads((EFFECTS / "Smoke FX.ablpreset").read_text(encoding="utf-8"))
 check("saved Drive macro name", saved["parameters"]["Macro0"]["customName"] == "Drive", saved["parameters"]["Macro0"])
 check("drive is mapped to macro 1",
       saved["chains"][0]["devices"][0]["parameters"]["PreDrive"]["macroMapping"]["macroIndex"] == 0)
+
+loaded = get("/api/effects/load?path=Smoke%20FX.ablpreset")
+check("load returns the saturator", loaded["devices"][0]["kind"] == "saturator", loaded.get("devices"))
+check("load returns Drive on knob 1", loaded["macros"][0]["name"] == "Drive", loaded.get("macros"))
+check("load keeps PreDrive at default-or-saved",
+      "PreDrive" in loaded["devices"][0]["parameters"], loaded["devices"][0]["parameters"])
+
+over = post("/api/effects/build", {
+    "name": "Smoke FX",
+    "replace": "Smoke FX.ablpreset",
+    "devices": [{"kind": "delay", "parameters": {"Feedback": 0.7}}],
+})
+check("overwrite keeps the same path", over["path"] == "Smoke FX.ablpreset", over)
+saved2 = json.loads((EFFECTS / "Smoke FX.ablpreset").read_text(encoding="utf-8"))
+check("overwrite replaced the device", saved2["chains"][0]["devices"][0]["kind"] == "delay")
+check("overwrite applied Feedback", saved2["chains"][0]["devices"][0]["parameters"]["Feedback"] == 0.7)
 
 listing = get("/api/list?kind=effects")
 names = [item["name"] for item in listing["items"]]

@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from .config import PROJECT_ROOT
-from .move import effects, kits, library, paths, sets
+from .move import effects, kits, library, paths, presets, sets
 from .move.backend import MoveBackend
 from .move.pad_colors import PAD_COLORS, hex_color
 from .move.paths import UnsafePath
@@ -323,6 +323,26 @@ async def copy_to_samples(body: CopyToSamplesRequest):
     return {"copied": copied, "failed": failed, "dest": (body.dest or "Factory").strip("/")}
 
 
+class MoveToSamplesRequest(BaseModel):
+    kind: str = "recordings"
+    items: list[str]
+    dest: str = "Recordings"
+
+
+@app.post("/api/move-to-samples")
+async def move_to_samples(body: MoveToSamplesRequest):
+    """Move Recordings into Samples so they can be sliced and used in kits."""
+    try:
+        moved, failed = library.move_into_samples(
+            get_backend(), body.kind, body.items, body.dest
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if moved:
+        get_backend().refresh_library()
+    return {"moved": moved, "failed": failed, "dest": (body.dest or "Recordings").strip("/")}
+
+
 @app.get("/api/download")
 async def download(kind: str, path: str):
     backend = get_backend()
@@ -576,14 +596,34 @@ def _pad_sources(body: KitBuildRequest) -> list[tuple[str, float | None, float |
     return sources
 
 
-def _kit_preset(name: str, pads: list[kits.Pad], body: KitBuildRequest) -> dict:
+def _kit_fx_device(backend, spec: str | None, default: str) -> dict | None:
+    """Resolve a kit FX dropdown value to a device, loading user presets as needed."""
+    if spec is not None and str(spec).strip().startswith(kits.PRESET_PREFIX):
+        try:
+            relative = kits._normalise_effect(spec, default)[len(kits.PRESET_PREFIX) :]
+        except kits.EffectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        target = paths.resolve("effects", relative)
+        if not backend.exists(target):
+            raise HTTPException(status_code=400, detail=f"effect preset not found: {relative}")
+        try:
+            return kits.device_from_preset(backend.read_file(target), relative)
+        except kits.EffectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        return kits.slot_device(spec, default)
+    except kits.EffectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _kit_preset(name: str, pads: list[kits.Pad], body: KitBuildRequest, backend) -> dict:
     try:
         return kits.build_preset(
             name,
             pads,
             body.kit_type,
-            body.return_effect,
-            body.insert_effect,
+            _kit_fx_device(backend, body.return_effect, kits.DEFAULT_RETURN_EFFECT),
+            _kit_fx_device(backend, body.insert_effect, kits.DEFAULT_INSERT_EFFECT),
         )
     except kits.EffectError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -603,7 +643,7 @@ async def kit_build(body: KitBuildRequest):
             else kits.Pad()
             for path, start, length in sources
         ]
-        preset = _kit_preset(name, pads, body)
+        preset = _kit_preset(name, pads, body, backend)
 
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -635,7 +675,7 @@ async def kit_build(body: KitBuildRequest):
         else kits.Pad()
         for path, start, length in sources
     ]
-    preset = _kit_preset(name, pads, body)
+    preset = _kit_preset(name, pads, body, backend)
 
     target = paths.resolve("presets", f"{name}.ablpreset")
     backend.write_file(target, json.dumps(preset, indent=2).encode("utf-8"))
@@ -667,6 +707,7 @@ class EffectMacroRequest(BaseModel):
 class EffectBuildRequest(BaseModel):
     name: str
     folder: str = ""
+    replace: str = ""
     output: str = "device"
     devices: list[EffectDeviceRequest] = []
     macros: list[EffectMacroRequest] = []
@@ -675,6 +716,34 @@ class EffectBuildRequest(BaseModel):
 @app.get("/api/effects/catalog")
 async def effect_catalog():
     return {"effects": effects.catalog()}
+
+
+@app.get("/api/effects/presets")
+async def effect_presets():
+    return {"presets": effects.list_presets(get_backend())}
+
+
+@app.get("/api/effects/load")
+async def effect_load(path: str):
+    try:
+        absolute = paths.resolve("effects", path)
+    except UnsafePath as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    backend = get_backend()
+    if not backend.exists(absolute) or backend.is_dir(absolute):
+        raise HTTPException(status_code=404, detail="effect preset not found")
+    if posixpath.splitext(absolute)[1].lower() != ".ablpreset":
+        raise HTTPException(status_code=400, detail="select an .ablpreset to edit")
+    try:
+        parsed = effects.parse_preset(backend.read_file(absolute))
+    except effects.EffectError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    relative = paths.relative_to("effects", absolute)
+    if not parsed["name"]:
+        parsed["name"] = posixpath.splitext(posixpath.basename(relative))[0]
+    parsed["path"] = relative
+    parsed["folder"] = posixpath.dirname(relative)
+    return parsed
 
 
 @app.post("/api/effects/build")
@@ -709,14 +778,139 @@ async def effect_build(body: EffectBuildRequest):
         )
 
     backend = get_backend()
-    target = paths.resolve("effects", effects.dest_path(body.folder, name))
-    if backend.exists(target):
+    folder = (body.folder or "").replace("\\", "/").strip("/")
+    replace = (body.replace or "").replace("\\", "/").strip("/")
+    if replace and not folder:
+        folder = posixpath.dirname(replace)
+    target = paths.resolve("effects", effects.dest_path(folder, name))
+    replacing = paths.resolve("effects", replace) if replace else None
+    if backend.exists(target) and target != replacing:
         raise HTTPException(status_code=409, detail=f"{filename} already exists")
     backend.write_file(target, payload)
+    if replacing and replacing != target and backend.exists(replacing):
+        backend.remove(replacing)
     refresh_result = backend.refresh_library()
     return {
         "ok": True,
         "path": paths.relative_to("effects", target),
+        "name": filename,
+        "devices": len(body.devices),
+        "refreshed": refresh_result.ok,
+        "refresh_error": None if refresh_result.ok else refresh_result.stderr.strip(),
+    }
+
+
+class TrackInstrumentRef(BaseModel):
+    source: str = "presets"
+    path: str = ""
+    preset: dict | None = None
+
+
+class TrackPresetBuildRequest(BaseModel):
+    name: str
+    folder: str = ""
+    replace: str = ""
+    output: str = "device"
+    instrument: TrackInstrumentRef
+    devices: list[EffectDeviceRequest] = []
+    macros: list[EffectMacroRequest] = []
+
+
+@app.get("/api/presets/instruments")
+async def preset_instruments():
+    return {"instruments": presets.list_instruments(get_backend())}
+
+
+@app.get("/api/presets/load")
+async def preset_load(source: str, path: str):
+    try:
+        loaded = presets.load_instrument(get_backend(), source, path)
+    except (presets.PresetError, UnsafePath) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "name": loaded["name"],
+        "kind": loaded["kind"],
+        "source": loaded["source"],
+        "path": loaded["path"],
+        "instrument": loaded["device"],
+        "effects": loaded["effects"],
+        "macros": loaded.get("macros") or [],
+        "folder": posixpath.dirname(loaded["path"]) if loaded["source"] == "presets" else "",
+    }
+
+
+@app.post("/api/presets/parse")
+async def preset_parse(body: TrackInstrumentRef):
+    if not body.preset:
+        raise HTTPException(status_code=400, detail="upload a preset file")
+    try:
+        loaded = presets.load_inline(body.preset)
+    except presets.PresetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "name": loaded["name"],
+        "kind": loaded["kind"],
+        "source": loaded["source"],
+        "path": loaded["path"],
+        "instrument": loaded["device"],
+        "effects": loaded["effects"],
+        "macros": loaded.get("macros") or [],
+        "folder": "",
+    }
+
+
+@app.post("/api/presets/build")
+async def preset_build(body: TrackPresetBuildRequest):
+    name = _safe_filename(body.name)
+    backend = get_backend()
+    try:
+        if body.instrument.preset:
+            loaded = presets.load_inline(body.instrument.preset)
+        else:
+            loaded = presets.load_instrument(backend, body.instrument.source, body.instrument.path)
+        preset = presets.build_track_preset(
+            name,
+            loaded["device"],
+            [{"kind": item.kind, "parameters": item.parameters} for item in body.devices],
+            [
+                {
+                    "index": item.index,
+                    "name": item.name,
+                    "device": item.device,
+                    "param": item.param,
+                    "min": item.min,
+                    "max": item.max,
+                }
+                for item in body.macros
+            ],
+        )
+    except (presets.PresetError, UnsafePath) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    payload = json.dumps(preset, indent=2).encode("utf-8")
+    filename = f"{name}.ablpreset"
+    if body.output == "file":
+        return Response(
+            content=payload,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    folder = (body.folder or "").replace("\\", "/").strip("/")
+    replace = (body.replace or "").replace("\\", "/").strip("/")
+    if replace and not folder:
+        folder = posixpath.dirname(replace)
+    target = paths.resolve("presets", presets.dest_path(folder, name))
+    replacing = paths.resolve("presets", replace) if replace else None
+    if backend.exists(target) and target != replacing:
+        raise HTTPException(status_code=409, detail=f"{filename} already exists")
+    backend.write_file(target, payload)
+    if replacing and replacing != target and backend.exists(replacing):
+        backend.remove(replacing)
+    refresh_result = backend.refresh_library()
+    return {
+        "ok": True,
+        "path": paths.relative_to("presets", target),
         "name": filename,
         "devices": len(body.devices),
         "refreshed": refresh_result.ok,

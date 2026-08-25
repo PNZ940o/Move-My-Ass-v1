@@ -107,6 +107,39 @@ def copy_into_samples(backend: MoveBackend, kind: str, items: list[str], dest_fo
     return copied, failed
 
 
+def move_into_samples(backend: MoveBackend, kind: str, items: list[str], dest_folder: str = "Recordings") -> tuple[list[str], list[dict]]:
+    """Move Recordings into UserLibrary/Samples/<dest_folder>/."""
+    if kind != "recordings":
+        raise ValueError("can only move from Recordings")
+    if not items:
+        raise ValueError("nothing to move")
+
+    dest_folder = (dest_folder or "Recordings").replace("\\", "/").strip("/")
+    if not dest_folder or ".." in dest_folder.split("/"):
+        raise ValueError("invalid destination")
+
+    dest_root = paths.resolve("samples", dest_folder)
+    moved, failed = [], []
+    for item in items:
+        try:
+            source = paths.resolve(kind, item)
+            target = paths.resolve("samples", posixpath.join(dest_folder, item))
+            if source == dest_root or dest_root.startswith(source + "/"):
+                raise ValueError("can't move a library root onto itself")
+            if backend.exists(target):
+                raise FileExistsError(f"{posixpath.basename(item)} already exists in Samples/{dest_folder}")
+            backend.makedirs(posixpath.dirname(target))
+            try:
+                backend.rename(source, target)
+            except Exception:
+                _copy_entry(backend, source, target)
+                backend.remove(source)
+            moved.append(item)
+        except Exception as exc:
+            failed.append({"name": item, "error": str(exc)})
+    return moved, failed
+
+
 def _copy_entry(backend: MoveBackend, source: str, dest: str) -> None:
     if backend.is_dir(source):
         backend.makedirs(dest)

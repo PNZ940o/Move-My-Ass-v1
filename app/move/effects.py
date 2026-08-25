@@ -7,7 +7,10 @@ names and defaults come from factory kits and Note/Move example sets.
 
 from __future__ import annotations
 
+import json
 import posixpath
+
+from . import paths
 
 SCHEMA = "http://tech.ableton.com/schema/song/1.4.4/devicePreset.json"
 
@@ -467,6 +470,23 @@ def defaults_for(kind: str) -> dict:
     return {param["id"]: param["default"] for param in item["params"]}
 
 
+def parse_device(device: dict | None) -> dict | None:
+    """Turn one saved device dict into editor `{kind, parameters}`, or None."""
+    kind = (device or {}).get("kind")
+    if kind not in BY_KIND:
+        return None
+    parameters = defaults_for(kind)
+    for pid, raw in (device.get("parameters") or {}).items():
+        if pid not in parameters:
+            continue
+        value, _mapping = _decode_param(raw)
+        try:
+            parameters[pid] = _coerce(kind, pid, value)
+        except EffectError:
+            continue
+    return {"kind": kind, "parameters": parameters}
+
+
 def _macro_position(value, lo: float, hi: float) -> float:
     if isinstance(value, bool):
         value = 1.0 if value else 0.0
@@ -630,3 +650,138 @@ def build_preset(name: str, devices: list[dict], macros: list[dict] | None = Non
 def dest_path(folder: str, name: str) -> str:
     relative = posixpath.join((folder or "").strip("/"), f"{name}.ablpreset")
     return relative.lstrip("/")
+
+
+def _decode_param(raw):
+    if isinstance(raw, dict) and "value" in raw:
+        mapping = raw.get("macroMapping")
+        return raw["value"], mapping if isinstance(mapping, dict) else None
+    return raw, None
+
+
+def parse_preset(data: bytes) -> dict:
+    """Turn a saved `.ablpreset` back into editor `{name, devices, macros}`."""
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EffectError("effect preset is not readable") from exc
+
+    if not isinstance(payload, dict) or not payload.get("kind"):
+        raise EffectError("this file is not a Move effect")
+
+    skipped: list[str] = []
+    raw_devices: list[dict] = []
+    kind = payload.get("kind")
+    if kind in BY_KIND:
+        raw_devices = [payload]
+    elif kind == "audioEffectRack":
+        chains = payload.get("chains") or []
+        if not chains:
+            raise EffectError("this rack has no devices")
+        for chain in chains:
+            for device in chain.get("devices") or []:
+                device_kind = (device or {}).get("kind")
+                if device_kind in BY_KIND:
+                    raw_devices.append(device)
+                elif device_kind:
+                    skipped.append(str(device_kind))
+    else:
+        raise EffectError("this preset is not an audio effect")
+
+    truncated = len(raw_devices) > MAX_DEVICES
+    raw_devices = raw_devices[:MAX_DEVICES]
+    if not raw_devices:
+        raise EffectError("this preset has no editable effects")
+
+    devices = []
+    macros: list[dict] = []
+    seen_macros: set[int] = set()
+    for index, device in enumerate(raw_devices):
+        device_kind = device["kind"]
+        parameters = defaults_for(device_kind)
+        for pid, raw in (device.get("parameters") or {}).items():
+            if pid not in parameters:
+                continue
+            value, mapping = _decode_param(raw)
+            try:
+                parameters[pid] = _coerce(device_kind, pid, value)
+            except EffectError:
+                continue
+            if not mapping:
+                continue
+            try:
+                macro_index = int(mapping.get("macroIndex", -1))
+            except (TypeError, ValueError):
+                continue
+            if macro_index < 0 or macro_index > 7 or macro_index in seen_macros:
+                continue
+            spec = _spec_for(device_kind, pid)
+            if spec["type"] == "enum":
+                continue
+            seen_macros.add(macro_index)
+            lo = mapping.get("rangeMin")
+            hi = mapping.get("rangeMax")
+            try:
+                lo = spec["min"] if lo is None else float(lo)
+                hi = spec["max"] if hi is None else float(hi)
+            except (TypeError, ValueError):
+                lo, hi = spec["min"], spec["max"]
+            if spec["type"] == "bool":
+                lo, hi = 0.0, 1.0
+            macros.append({
+                "index": macro_index,
+                "name": spec["label"],
+                "device": index,
+                "param": pid,
+                "min": lo,
+                "max": hi,
+            })
+        devices.append({"kind": device_kind, "parameters": parameters})
+
+    rack_params = payload.get("parameters") or {} if kind == "audioEffectRack" else {}
+    for slot in macros:
+        named = rack_params.get(f"Macro{slot['index']}")
+        if isinstance(named, dict) and named.get("customName"):
+            slot["name"] = str(named["customName"]).strip()[:24] or slot["name"]
+
+    name = str(payload.get("name") or "").strip()
+    return {
+        "name": name,
+        "devices": devices,
+        "macros": sorted(macros, key=lambda item: item["index"]),
+        "skipped": skipped,
+        "truncated": truncated,
+    }
+
+
+def list_presets(backend, limit: int = 400) -> list[dict]:
+    """Saved Audio Effects presets, nested folders included."""
+    found: list[dict] = []
+
+    def walk(relative: str = "") -> None:
+        if len(found) >= limit:
+            return
+        try:
+            entries = backend.list_dir(paths.resolve("effects", relative))
+        except OSError:
+            return
+        for entry in sorted(entries, key=lambda item: item.name.lower()):
+            if len(found) >= limit:
+                return
+            if entry.name.startswith("."):
+                continue
+            rel = paths.relative_to("effects", entry.path)
+            if entry.is_dir:
+                walk(rel)
+                continue
+            if posixpath.splitext(entry.name)[1].lower() != ".ablpreset":
+                continue
+            stem = posixpath.splitext(rel)[0]
+            found.append({
+                "path": rel,
+                "name": posixpath.basename(stem),
+                "label": stem.replace("/", " / "),
+            })
+
+    walk()
+    return found

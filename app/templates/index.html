@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Move My Ass</title>
 <link rel="icon" href="/static/logo.png?v=glitch3">
-<link rel="stylesheet" href="/static/style.css?v=tabnav1">
+<link rel="stylesheet" href="/static/style.css?v=preset2">
 </head>
 <body>
 <header class="topbar">
@@ -112,7 +112,12 @@
       <button id="btn-slice" disabled>Slice into kit</button>
     </div>
     <div class="toolbar-fx" id="toolbar-fx" hidden>
-      <button id="btn-fx">Make effect</button>
+      <button id="btn-fx" class="make">Make effect</button>
+      <button id="btn-fx-edit" disabled>Edit effect</button>
+    </div>
+    <div class="toolbar-fx" id="toolbar-preset" hidden>
+      <button id="btn-preset" class="make">Make preset</button>
+      <button id="btn-preset-edit" disabled>Edit preset</button>
     </div>
   </div>
 
@@ -144,14 +149,6 @@
       <span class="kicker" id="kit-kicker">Drum rack</span>
       <h2 id="kit-title">Build kit</h2>
     </div>
-  </div>
-  <section class="studio-card">
-    <div class="studio-card-head">
-      <div>
-        <span class="kicker">Setup</span>
-        <strong>Kit</strong>
-      </div>
-    </div>
     <div class="kit-meta">
       <label>Kit name <input id="kit-name" placeholder="My Kit"></label>
       <label>Type
@@ -165,10 +162,14 @@
         <select id="kit-return-fx">
           <option value="">Off</option>
           <option value="reverb" selected>Reverb</option>
-          <option value="saturator">Saturator</option>
           <option value="delay">Delay</option>
+          <option value="autoFilter">Auto Filter</option>
           <option value="chorus">Chorus-Ensemble</option>
           <option value="phaser">Phaser-Flanger</option>
+          <option value="autoPan">Auto Pan</option>
+          <option value="autoShift">Auto Shift</option>
+          <option value="erosion">Erosion</option>
+          <option value="saturator">Saturator</option>
           <option value="channelEq">Channel EQ</option>
           <option value="compressor">Compressor</option>
           <option value="limiter">Limiter</option>
@@ -179,10 +180,14 @@
         <select id="kit-insert-fx">
           <option value="">Off</option>
           <option value="reverb">Reverb</option>
-          <option value="saturator" selected>Saturator</option>
           <option value="delay">Delay</option>
+          <option value="autoFilter">Auto Filter</option>
           <option value="chorus">Chorus-Ensemble</option>
           <option value="phaser">Phaser-Flanger</option>
+          <option value="autoPan">Auto Pan</option>
+          <option value="autoShift">Auto Shift</option>
+          <option value="erosion">Erosion</option>
+          <option value="saturator" selected>Saturator</option>
           <option value="channelEq">Channel EQ</option>
           <option value="compressor">Compressor</option>
           <option value="limiter">Limiter</option>
@@ -190,19 +195,29 @@
         </select>
       </label>
     </div>
-  </section>
+  </div>
 
   <div id="kit-slice-controls" hidden>
-    <label>Slices <span id="slice-count-label">16</span>
-      <input type="range" id="kit-slices" min="2" max="16" value="16">
-    </label>
-    <p class="hint" id="kit-slice-info"></p>
+    <div class="kit-slice-bar">
+      <label>Slices <span id="slice-count-label">16</span>
+        <input type="range" id="kit-slices" min="2" max="16" value="16">
+      </label>
+      <span class="hint" id="kit-slice-info"></span>
+    </div>
     <div class="kit-overview" id="kit-overview" hidden>
+      <div class="kit-zoom" role="group" aria-label="Wave zoom">
+        <button type="button" id="kit-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+        <button type="button" id="kit-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+        <button type="button" id="kit-zoom-fit" title="Fit whole sample" aria-label="Fit">Fit</button>
+      </div>
       <canvas></canvas>
+      <div class="kit-overview-nav" id="kit-overview-nav" hidden>
+        <div class="kit-overview-thumb" id="kit-overview-thumb"></div>
+      </div>
     </div>
   </div>
 
-  <div class="padgrid" id="padgrid"></div>
+  <div class="padgrid" id="padgrid" tabindex="-1"></div>
   <div class="studio-foot">
     <p class="hint" id="kit-hint"></p>
     <menu>
@@ -218,6 +233,16 @@
     <input id="fx-name" placeholder="My Effect" autocomplete="off" spellcheck="false" aria-label="Effect name">
     <div class="fx-macros" id="fx-macros"></div>
     <button type="button" id="fx-macros-fill" class="ghost">Fill knobs</button>
+  </div>
+  <div id="fx-instrument" class="fx-instrument" hidden>
+    <label>Instrument
+      <select id="fx-instrument-select">
+        <option value="">Pick an instrument…</option>
+      </select>
+    </label>
+    <button type="button" id="fx-instrument-upload" class="ghost">Upload</button>
+    <input id="fx-instrument-file" type="file" accept=".ablpreset,.json,application/json" hidden>
+    <span class="hint" id="fx-instrument-info"></span>
   </div>
   <div class="fx-add" id="fx-add"></div>
   <div class="fx-chain" id="fx-chain"></div>
@@ -239,6 +264,6 @@
 
 <div id="toasts"></div>
 <script src="/static/fx-viz.js?v=fxnew1"></script>
-<script src="/static/app.js?v=tabsleft1"></script>
+<script src="/static/app.js?v=preset2"></script>
 </body>
 </html>

@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import array
 import io
+import json
 import posixpath
 import re
 import struct
 import wave
 from dataclasses import dataclass
 from urllib.parse import quote
+
+from .effects import CATALOG as EFFECT_CATALOG
 
 PAD_COUNT = 16
 BASE_NOTE = 36
@@ -36,23 +39,14 @@ KIT_TYPES: dict[str, dict] = {
 
 # Two FX slots on a Move drum kit: a return-chain send (official default:
 # reverb) and an insert after the drum rack (official default: saturator).
-# Kinds match devices used in factory kits and Note/Move presets.
-EFFECT_KINDS: dict[str, str] = {
-    "reverb": "Reverb",
-    "saturator": "Saturator",
-    "delay": "Delay",
-    "chorus": "Chorus-Ensemble",
-    "phaser": "Phaser-Flanger",
-    "channelEq": "Channel EQ",
-    "compressor": "Compressor",
-    "limiter": "Limiter",
-    "redux2": "Redux",
-}
+# Kinds match the Make effect catalog so kit menus stay in lockstep.
+PRESET_PREFIX = "preset:"
+EFFECT_KINDS: dict[str, str] = {item["kind"]: item["name"] for item in EFFECT_CATALOG}
 DEFAULT_RETURN_EFFECT = "reverb"
 DEFAULT_INSERT_EFFECT = "saturator"
 
-# Pad order across Move's 4x4 grid. Row one is the backbone of a beat, row two
-# the hats, row three toms, row four cymbals and colour.
+# Pad order across Move's 4x4 grid. Pad 1 is bottom-left (MIDI 36). Bottom row
+# is the backbone of a beat, then hats, toms, cymbals and colour.
 ROLE_KEYWORDS: list[tuple[str, list[str]]] = [
     ("kick", ["kick", "bassdrum", "bass drum", "bd", "boom"]),
     ("snare", ["snare", "sd", "snr"]),
@@ -297,6 +291,26 @@ def slices_from_normalised(regions: list[dict], total_seconds: float) -> list[di
     return slices
 
 
+def effect_uri(relative_path: str) -> str:
+    """URI for an Audio Effects preset already sitting in Move's user library."""
+    return "ableton:/user-library/Audio Effects/" + quote(relative_path.strip("/"))
+
+
+def device_from_preset(data: bytes, relative: str) -> dict:
+    """Turn a saved `.ablpreset` into a device that can sit on a kit FX slot."""
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EffectError("effect preset is not readable") from exc
+    if not isinstance(payload, dict) or not payload.get("kind"):
+        raise EffectError("effect preset is not a Move device")
+    device = {key: value for key, value in payload.items() if key != "$schema"}
+    device["presetUri"] = effect_uri(relative)
+    if not device.get("name"):
+        device["name"] = posixpath.splitext(posixpath.basename(relative))[0]
+    return device
+
+
 def _normalise_effect(kind: str | None, default: str) -> str:
     """Resolve an FX slot: None keeps the official default, '' turns the slot off."""
     if kind is None:
@@ -304,6 +318,11 @@ def _normalise_effect(kind: str | None, default: str) -> str:
     kind = str(kind).strip()
     if kind in ("", "off", "none"):
         return ""
+    if kind.startswith(PRESET_PREFIX):
+        path = kind[len(PRESET_PREFIX) :].strip().replace("\\", "/").lstrip("/")
+        if not path or ".." in path.split("/"):
+            raise EffectError("invalid effect preset")
+        return PRESET_PREFIX + path
     if kind not in EFFECT_KINDS:
         raise EffectError(f"unknown effect: {kind}")
     return kind
@@ -319,14 +338,32 @@ def _effect_device(kind: str) -> dict:
     }
 
 
-def _return_chains(kind: str) -> list:
+def slot_device(value, default: str) -> dict | None:
+    """Build the device for one kit FX slot, or None when the slot is off.
+
+    `value` is a catalog kind, `preset:path`, a ready device dict, None (default),
+    or empty (off). Preset paths must already be loaded into a device dict.
+    """
+    if isinstance(value, dict):
+        if not value.get("kind"):
+            raise EffectError("effect preset is missing a kind")
+        return value
+    kind = _normalise_effect(value, default)
     if not kind:
+        return None
+    if kind.startswith(PRESET_PREFIX):
+        raise EffectError("effect preset was not loaded")
+    return _effect_device(kind)
+
+
+def _return_chains_from_device(device: dict | None) -> list:
+    if not device:
         return []
     return [
         {
             "name": "",
             "color": 0,
-            "devices": [_effect_device(kind)],
+            "devices": [device],
             "mixer": {
                 "pan": 0.0,
                 "solo-cue": False,
@@ -387,8 +424,8 @@ def build_preset(
     spec = KIT_TYPES.get(kit_type, KIT_TYPES["drum"])
     padded = (pads + [Pad()] * PAD_COUNT)[:PAD_COUNT]
     macros = {f"Macro{i}": 0.0 for i in range(8)}
-    ret = _normalise_effect(return_effect, DEFAULT_RETURN_EFFECT)
-    ins = _normalise_effect(insert_effect, DEFAULT_INSERT_EFFECT)
+    ret = slot_device(return_effect, DEFAULT_RETURN_EFFECT)
+    ins = slot_device(insert_effect, DEFAULT_INSERT_EFFECT)
 
     devices: list[dict] = [
         {
@@ -401,11 +438,11 @@ def build_preset(
             "chains": [
                 _drum_cell(pad, index, spec) for index, pad in enumerate(padded)
             ],
-            "returnChains": _return_chains(ret),
+            "returnChains": _return_chains_from_device(ret),
         }
     ]
     if ins:
-        devices.append(_effect_device(ins))
+        devices.append(ins)
 
     return {
         "$schema": SCHEMA,
