@@ -3324,45 +3324,87 @@ function renderFxCard(index, item, { locked = false } = {}) {
     : [{ id: "all", name: "Parameters", viz: null, params: (spec?.params || []).filter((p) => p.id !== "Enabled") }];
   const grid = document.createElement("div");
   grid.className = "fx-sections";
-  for (const section of layout) grid.append(renderFxSection(index, section));
+  const solo = layout.length === 1;
+  for (const section of layout) grid.append(renderFxSection(index, section, { solo }));
   body.append(grid);
   card.append(head, body);
   return card;
 }
 
-function renderFxSection(index, section) {
-  const wrap = document.createElement("section");
+function renderFxPlot(index, plot) {
+  const vizWrap = document.createElement("div");
+  vizWrap.className = "fx-viz-wrap";
+  if (plot.label) {
+    const tag = document.createElement("div");
+    tag.className = "fx-plot-name";
+    tag.textContent = plot.label;
+    vizWrap.append(tag);
+  }
+  const canvas = document.createElement("canvas");
+  canvas.className = "fx-viz";
+  canvas.dataset.fxViz = plot.viz;
+  if (plot.map) canvas.dataset.fxMap = plot.map;
+  if (plot.interactive === false) canvas.dataset.fxStatic = "1";
+  canvas.width = 640;
+  canvas.height = 220;
+  if (plot.caption) canvas.title = plot.caption;
+  const cap = document.createElement("div");
+  cap.className = "fx-viz-cap";
+  cap.dataset.idle = plot.caption || "";
+  vizWrap.append(canvas, cap);
+  if (window.FxViz) {
+    window.FxViz.bind(canvas, () => fxItemAt(index), (id, value) => setFxParam(index, id, value, true));
+  }
+  return vizWrap;
+}
+
+function fxSectionPlots(section) {
+  if (section.plots?.length) {
+    return section.plots.map((plot) => ({
+      ...plot,
+      label: plot.caption || "",
+      caption: plot.caption || "",
+    }));
+  }
+  if (!section.viz) return [];
+  return [{
+    viz: section.viz,
+    map: section.map,
+    interactive: section.interactive,
+    caption: section.caption || "",
+  }];
+}
+
+function renderFxSection(index, section, { solo = false } = {}) {
+  const plots = fxSectionPlots(section);
+  const wrap = document.createElement("details");
   wrap.className = [
     "fx-section",
-    section.wide ? "wide" : "",
-    section.span === 2 ? "span2" : "",
-    section.viz ? "has-viz" : "",
+    section.open ? "main" : "folded",
+    plots.length ? "has-viz" : "",
+    plots.length > 1 ? "multi-plot" : "",
+    solo ? "solo" : "",
   ].filter(Boolean).join(" ");
-  const name = document.createElement("h3");
+  wrap.open = Boolean(section.open) || solo;
+  const name = document.createElement("summary");
   name.className = "fx-section-name";
   name.textContent = section.name;
   wrap.append(name);
-  if (section.viz) {
-    const vizWrap = document.createElement("div");
-    vizWrap.className = "fx-viz-wrap";
-    const canvas = document.createElement("canvas");
-    canvas.className = "fx-viz";
-    canvas.dataset.fxViz = section.viz;
-    if (section.map) canvas.dataset.fxMap = section.map;
-    if (section.interactive === false) canvas.dataset.fxStatic = "1";
-    canvas.width = 640;
-    canvas.height = 220;
-    if (section.caption) canvas.title = section.caption;
-    const cap = document.createElement("div");
-    cap.className = "fx-viz-cap";
-    cap.dataset.idle = section.caption || "";
-    vizWrap.append(canvas, cap);
-    if (window.FxViz) {
-      window.FxViz.bind(canvas, () => fxItemAt(index), (id, value) => setFxParam(index, id, value, true));
-    }
-    wrap.append(vizWrap);
+  const body = document.createElement("div");
+  body.className = "fx-section-body";
+  if (plots.length) {
+    const plotGrid = document.createElement("div");
+    plotGrid.className = plots.length > 1 ? "fx-plots" : "fx-plots single";
+    for (const plot of plots) plotGrid.append(renderFxPlot(index, plot));
+    body.append(plotGrid);
   }
-  if (section.params?.length) wrap.append(renderFxParamGroup(index, section.params, "section"));
+  if (section.params?.length) body.append(renderFxParamGroup(index, section.params, "section"));
+  wrap.append(body);
+  wrap.addEventListener("toggle", () => {
+    if (!wrap.open) return;
+    redrawFxViz(index);
+    requestAnimationFrame(() => redrawFxViz(index));
+  });
   return wrap;
 }
 
@@ -3629,7 +3671,7 @@ function showFxLive(slot, opts) {
   section?.classList.add("live");
   (section?.querySelector(".fx-viz-wrap") || card?.querySelector(".fx-viz-wrap"))?.classList.add("live");
   document.querySelector(`[data-fx-knob="${slot.index}"]`)?.classList.add("turning");
-  const more = wrap?.closest("details.fx-more");
+  const more = wrap?.closest("details.fx-section, details.fx-more");
   if (more) more.open = true;
   if (opts?.scroll) wrap?.scrollIntoView({ block: "nearest", inline: "nearest" });
   updateFxLiveCaption(slot);

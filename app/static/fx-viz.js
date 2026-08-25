@@ -25,39 +25,42 @@
   /* Live Device View: named panels + the plot that belongs with each one. */
   const SECTIONS = {
     drift: [
-      { id: "osc1", name: "Oscillator 1", viz: "osc", caption: "Osc mix — drag shape and shape mod", params: ["Oscillator1_Type", "Oscillator1_Shape", "Oscillator1_ShapeMod", "Oscillator1_Transpose"] },
-      { id: "osc2", name: "Oscillator 2", viz: null, params: ["Oscillator2_Type", "Oscillator2_Detune", "Oscillator2_Transpose"] },
-      { id: "mixer", name: "Mixer", viz: null, params: ["Mixer_OscillatorOn1", "Mixer_OscillatorOn2", "Mixer_OscillatorGain1", "Mixer_OscillatorGain2", "Mixer_NoiseOn", "Mixer_NoiseLevel"] },
-      { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", span: 2, params: ["Filter_Type", "Filter_Frequency", "Filter_Resonance", "Filter_HiPassFrequency", "Filter_ModAmount1", "Filter_ModAmount2"] },
-      { id: "env1", name: "Env 1 · Amp", viz: "adsr", map: "driftEnv1", caption: "Amp envelope — drag the stages", params: ["Envelope1_Attack", "Envelope1_Decay", "Envelope1_Sustain", "Envelope1_Release"] },
-      { id: "env2", name: "Env 2 · Mod", viz: "adsr", map: "driftEnv2", caption: "Mod envelope — drag the stages", params: ["Envelope2_Attack", "Envelope2_Decay", "Envelope2_Sustain", "Envelope2_Release"] },
-      { id: "lfo", name: "LFO", viz: "lfo", map: "driftLfo", caption: "LFO — drag rate and amount", params: ["Lfo_Amount", "Lfo_Rate", "Lfo_Time", "Lfo_Retrigger", "PitchModulation_Amount1", "PitchModulation_Amount2"] },
-      { id: "global", name: "Global", viz: null, params: ["Global_Volume", "Global_Glide", "Global_Transpose", "Global_DriftDepth", "Global_UnisonVoiceDepth"] },
+      { id: "osc", name: "Oscillators", open: true, viz: "osc", caption: "Osc mix — drag shape and shape mod", params: ["Oscillator1_Type", "Oscillator1_Shape", "Oscillator1_ShapeMod", "Oscillator1_Transpose", "Oscillator2_Type", "Oscillator2_Detune", "Oscillator2_Transpose", "Mixer_OscillatorOn1", "Mixer_OscillatorOn2", "Mixer_OscillatorGain1", "Mixer_OscillatorGain2", "Mixer_NoiseOn", "Mixer_NoiseLevel", "PitchModulation_Amount1", "PitchModulation_Amount2"] },
+      { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", params: ["Filter_Type", "Filter_Frequency", "Filter_Resonance", "Filter_HiPassFrequency", "Filter_ModAmount1", "Filter_ModAmount2"] },
+      { id: "env", name: "Envelopes", plots: [
+        { viz: "adsr", map: "driftEnv1", caption: "Env 1 · Amp" },
+        { viz: "adsr", map: "driftEnv2", caption: "Env 2 · Mod" },
+      ], params: ["Envelope1_Attack", "Envelope1_Decay", "Envelope1_Sustain", "Envelope1_Release", "Envelope2_Attack", "Envelope2_Decay", "Envelope2_Sustain", "Envelope2_Release"] },
+      { id: "lfo", name: "LFO", viz: "lfo", map: "driftLfo", caption: "LFO — drag rate and amount", params: ["Lfo_Amount", "Lfo_Rate", "Lfo_Time", "Lfo_Retrigger"] },
+      { id: "global", name: "Global", params: ["Global_Volume", "Global_Glide", "Global_Transpose", "Global_DriftDepth", "Global_UnisonVoiceDepth"] },
     ],
     wavetable: [
-      { id: "osc1", name: "Oscillator 1", viz: "wt", map: "wtOsc1", caption: "Wavetable — drag position and level", params: ["Voice_Oscillator1_On", "Voice_Oscillator1_Gain", "Voice_Oscillator1_Wavetables_WavePosition", "Voice_Oscillator1_Pitch_Transpose", "Voice_Oscillator1_Pitch_Detune"] },
-      { id: "osc2", name: "Oscillator 2", viz: "wt", map: "wtOsc2", caption: "Wavetable 2 — drag position and level", params: ["Voice_Oscillator2_On", "Voice_Oscillator2_Gain", "Voice_Oscillator2_Wavetables_WavePosition", "Voice_Oscillator2_Pitch_Transpose"] },
-      { id: "sub", name: "Sub", viz: null, params: ["Voice_SubOscillator_On", "Voice_SubOscillator_Gain"] },
-      { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", span: 2, params: ["Voice_Filter1_On", "Voice_Filter1_Type", "Voice_Filter1_Frequency", "Voice_Filter1_Resonance", "Voice_Filter1_Drive"] },
+      { id: "osc", name: "Oscillators", open: true, plots: [
+        { viz: "wt", map: "wtOsc1", caption: "Osc 1" },
+        { viz: "wt", map: "wtOsc2", caption: "Osc 2" },
+      ], params: ["Voice_Oscillator1_On", "Voice_Oscillator1_Gain", "Voice_Oscillator1_Wavetables_WavePosition", "Voice_Oscillator1_Pitch_Transpose", "Voice_Oscillator1_Pitch_Detune", "Voice_Oscillator2_On", "Voice_Oscillator2_Gain", "Voice_Oscillator2_Wavetables_WavePosition", "Voice_Oscillator2_Pitch_Transpose", "Voice_SubOscillator_On", "Voice_SubOscillator_Gain"] },
+      { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", params: ["Voice_Filter1_On", "Voice_Filter1_Type", "Voice_Filter1_Frequency", "Voice_Filter1_Resonance", "Voice_Filter1_Drive"] },
       { id: "env", name: "Amp envelope", viz: "adsr", map: "wavetableAmp", caption: "Amp envelope — drag the stages", params: ["Voice_Modulators_AmpEnvelope_Times_Attack", "Voice_Modulators_AmpEnvelope_Times_Decay", "Voice_Modulators_AmpEnvelope_Sustain", "Voice_Modulators_AmpEnvelope_Times_Release"] },
       { id: "lfo", name: "LFO 1", viz: "lfo", map: "wavetableLfo", caption: "LFO — drag rate and amount", params: ["Voice_Modulators_Lfo1_Time_Rate", "Voice_Modulators_Lfo1_Shape_Amount"] },
-      { id: "global", name: "Global", viz: null, params: ["Volume", "Voice_Unison_Amount", "Voice_Global_Glide", "Voice_Global_Transpose"] },
+      { id: "global", name: "Global", params: ["Volume", "Voice_Unison_Amount", "Voice_Global_Glide", "Voice_Global_Transpose"] },
     ],
     melodicSampler: [
-      { id: "sample", name: "Sample", viz: "sample", caption: "Start and length — drag the region", span: 2, params: ["Voice_Gain", "Voice_PlaybackStart", "Voice_PlaybackLength", "Voice_Transpose", "Voice_Detune", "Voice_VelocityToVolume"] },
+      { id: "sample", name: "Sample", open: true, viz: "sample", caption: "Start and length — drag the region", params: ["Volume", "Voice_Gain", "Voice_PlaybackStart", "Voice_PlaybackLength", "Voice_Transpose", "Voice_Detune", "Voice_VelocityToVolume"] },
       { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", params: ["Voice_Filter_On", "Voice_Filter_Frequency", "Voice_Filter_Resonance"] },
       { id: "env", name: "Amp envelope", viz: "adsr", map: "samplerAmp", caption: "Amp envelope — drag the stages", params: ["Voice_AmplitudeEnvelope_Attack", "Voice_AmplitudeEnvelope_Decay", "Voice_AmplitudeEnvelope_Sustain", "Voice_AmplitudeEnvelope_Release"] },
       { id: "fenv", name: "Filter envelope", viz: "adsr", map: "samplerFilter", caption: "Filter envelope — drag the stages", params: ["Voice_FilterEnvelope_On", "Voice_FilterEnvelope_Attack", "Voice_FilterEnvelope_Decay", "Voice_FilterEnvelope_Sustain", "Voice_FilterEnvelope_Release"] },
       { id: "lfo", name: "LFO", viz: "lfo", map: "samplerLfo", caption: "LFO — drag rate", params: ["Voice_Lfo_On", "Voice_Lfo_Rate"] },
-      { id: "global", name: "Global", viz: null, params: ["Volume"] },
     ],
     drumRack: [
-      { id: "env", name: "Envelope", viz: "ahd", map: "drumAhd", caption: "AHD — drag attack, hold, decay", params: ["Voice_Envelope_Attack", "Voice_Envelope_Hold", "Voice_Envelope_Decay", "Volume", "Voice_Gain", "Voice_Transpose"] },
+      { id: "sample", name: "Sample", open: true, plots: [
+        { viz: "sample", caption: "Sample" },
+        { viz: "ahd", map: "drumAhd", caption: "AHD" },
+      ], params: ["Voice_Gain", "Voice_PlaybackStart", "Voice_PlaybackLength", "Voice_Envelope_Attack", "Voice_Envelope_Hold", "Voice_Envelope_Decay", "Voice_Transpose"] },
       { id: "filter", name: "Filter", viz: "filter", caption: "Filter — drag cutoff and resonance", params: ["Voice_Filter_On", "Voice_Filter_Frequency", "Voice_Filter_Resonance"] },
-      { id: "sample", name: "Sample", viz: "sample", caption: "Start and length — drag the region", params: ["Voice_PlaybackStart", "Voice_PlaybackLength", "Voice_VelocityToVolume"] },
+      { id: "global", name: "Global", params: ["Volume", "Voice_VelocityToVolume"] },
     ],
     reverb: [
-      { id: "display", name: "Reverb", viz: "device", interactive: false, caption: "Early reflections + decay", span: 2, params: ["FreezeOn", "DecayTime", "PreDelay", "RoomSize"] },
+      { id: "display", name: "Reverb", open: true, viz: "device", interactive: false, caption: "Early reflections + decay", params: ["FreezeOn", "DecayTime", "PreDelay", "RoomSize"] },
       { id: "mix", name: "Mix", viz: null, params: ["MixDirect", "MixReflect", "MixDiffuse", "DiffuseDelay", "StereoSeparation"] },
       { id: "character", name: "Character", viz: null, params: ["ChorusOn", "SpinOn", "CutOn", "FlatOn"] },
       { id: "eq", name: "EQ", viz: "reverbEq", caption: "Reverb EQ — drag the shelves", span: 2, params: ["ShelfLowOn", "ShelfLoFreq", "ShelfLoGain", "ShelfHighOn", "ShelfHiFreq", "ShelfHiGain", "BandLowOn", "BandHighOn", "BandFreq", "BandWidth"] },
@@ -1855,11 +1858,12 @@
     for (const section of layout) {
       const specs = (section.params || []).map((id) => byId[id]).filter((spec) => spec && !skipSpec(spec));
       specs.forEach((spec) => used.add(spec.id));
-      if (!specs.length && !section.viz) continue;
+      if (!specs.length && !section.viz && !section.plots?.length) continue;
       out.push({ ...section, params: specs });
     }
     const extra = list.filter((spec) => !skipSpec(spec) && !used.has(spec.id));
     if (extra.length) out.push({ id: "more", name: "More", viz: null, params: extra });
+    if (out.length && !out.some((section) => section.open)) out[0] = { ...out[0], open: true };
     return out;
   }
 
