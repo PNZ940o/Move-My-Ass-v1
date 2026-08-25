@@ -20,6 +20,35 @@ import paramiko
 from . import paths
 
 
+def _known_hosts_path() -> Path:
+    return Path.home() / ".ssh" / "known_hosts"
+
+
+def _known_host_names(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return []
+    return stripped.split()[0].split(",")
+
+
+def _replace_known_host(hostname: str, key) -> None:
+    """Swap the stored SSH host key after a Move firmware update."""
+    path = _known_hosts_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    kept = [line for line in lines if hostname not in _known_host_names(line)]
+    kept.append(f"{hostname} {key.get_name()} {key.get_base64()}")
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
+def _remember_host_key(client: paramiko.SSHClient, hostname: str, key) -> None:
+    keys = client.get_host_keys()
+    for name in list(keys.keys()):
+        if hostname == name or hostname in str(name).split(","):
+            del keys[name]
+    keys.add(hostname, key.get_name(), key)
+
+
 @dataclass(frozen=True)
 class Entry:
     name: str
@@ -184,15 +213,28 @@ class SftpBackend(MoveBackend):
         # A Move on the local network gets its host key trusted on first sight;
         # we are not authenticating a server we share secrets with.
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self._client.connect(
-            hostname=host,
-            port=port,
-            username=user,
-            key_filename=str(key_path) if key_path else None,
-            look_for_keys=True,
-            allow_agent=True,
-            timeout=timeout,
-        )
+
+        def _open():
+            self._client.connect(
+                hostname=host,
+                port=port,
+                username=user,
+                key_filename=str(key_path) if key_path else None,
+                look_for_keys=True,
+                allow_agent=True,
+                timeout=timeout,
+            )
+
+        try:
+            _open()
+        except paramiko.BadHostKeyException as exc:
+            got = getattr(exc, "key", None)
+            if got is None:
+                raise
+            hostname = getattr(exc, "hostname", None) or host
+            _replace_known_host(hostname, got)
+            _remember_host_key(self._client, hostname, got)
+            _open()
         self._sftp = self._client.open_sftp()
 
     def list_dir(self, path: str) -> list[Entry]:
