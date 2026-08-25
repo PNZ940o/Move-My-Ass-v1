@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..config import Settings, settings
 from .backend import LocalBackend, MoveBackend, SftpBackend
+from .undo import UndoStack
 
 
 class MoveConnectionError(RuntimeError):
@@ -20,6 +21,7 @@ class MoveSession:
         self._backend: MoveBackend | None = None
         self._lock = threading.Lock()
         self._last_error: str | None = None
+        self.undo = UndoStack()
 
     def backend(self) -> MoveBackend:
         with self._lock:
@@ -64,10 +66,12 @@ class MoveSession:
         with self._lock:
             self.config = replace(self.config, **changes)  # type: ignore[arg-type]
             self._close_locked()
+        self.undo.clear()
 
     def disconnect(self) -> None:
         with self._lock:
             self._close_locked()
+        self.undo.clear()
 
     def _close_locked(self) -> None:
         if self._backend is not None:

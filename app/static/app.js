@@ -37,6 +37,100 @@ function formatSize(bytes) {
   return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
+function formatStorageSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes === 0) return "0 B";
+  return formatSize(bytes);
+}
+
+const STORAGE_COLORS = {
+  samples: "samples",
+  sets: "sets",
+  presets: "presets",
+  other: "other",
+};
+
+function storagePartHint(category) {
+  const parts = (category.parts || []).filter((part) => part.bytes > 0);
+  if (!parts.length) return "";
+  return parts.map((part) => `${part.label} ${formatStorageSize(part.bytes)}`).join(" · ");
+}
+
+function renderStorage(data) {
+  const wrap = $("storage");
+  const bar = $("storage-bar");
+  const usedEl = $("storage-used");
+  const legend = $("storage-legend");
+  if (!wrap || !bar || !usedEl || !legend) return;
+  const total = Number(data.total) || 0;
+  const used = Number(data.used) || 0;
+  const free = Number(data.free) || Math.max(0, total - used);
+  if (total <= 0) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  wrap.dataset.ready = "1";
+  const pct = Math.max(0, Math.min(100, (used / total) * 100));
+  usedEl.textContent = `${formatStorageSize(used)} used of ${formatStorageSize(total)}`;
+  usedEl.title = `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}% full · ${formatStorageSize(free)} free`;
+
+  bar.innerHTML = "";
+  const segments = [...(data.categories || []), { id: "free", label: "Free", bytes: free }];
+  for (const category of segments) {
+    const bytes = Number(category.bytes) || 0;
+    let width = (bytes / total) * 100;
+    if (bytes > 0 && width < 0.7) width = 0.7;
+    const seg = document.createElement("span");
+    seg.className = `storage-seg ${category.id}`;
+    seg.style.width = `${width}%`;
+    const extra = storagePartHint(category);
+    seg.title = extra
+      ? `${category.label} ${formatStorageSize(bytes)} — ${extra}`
+      : `${category.label} ${formatStorageSize(bytes)}`;
+    bar.append(seg);
+  }
+  bar.setAttribute("aria-label", `${formatStorageSize(used)} used of ${formatStorageSize(total)}, ${formatStorageSize(free)} free`);
+
+  legend.innerHTML = "";
+  for (const category of data.categories || []) {
+    const bytes = Number(category.bytes) || 0;
+    const item = document.createElement("span");
+    if (!bytes) item.className = "empty";
+    const swatch = document.createElement("i");
+    swatch.className = STORAGE_COLORS[category.id] || "other";
+    item.append(swatch, document.createTextNode(`${category.label} ${formatStorageSize(bytes)}`));
+    const extra = storagePartHint(category);
+    item.title = extra || `${category.label} ${formatStorageSize(bytes)}`;
+    legend.append(item);
+  }
+}
+
+let storageRequest = 0;
+
+async function refreshStorage() {
+  const wrap = $("storage");
+  if (!wrap) return;
+  const gen = ++storageRequest;
+  wrap.hidden = false;
+  wrap.classList.add("busy");
+  if (!wrap.dataset.ready) {
+    const usedEl = $("storage-used");
+    if (usedEl) usedEl.textContent = "Measuring storage…";
+  }
+  try {
+    const data = await api("/api/storage");
+    if (gen !== storageRequest) return;
+    renderStorage(data);
+  } catch (error) {
+    if (gen !== storageRequest) return;
+    if (!wrap.dataset.ready) wrap.hidden = true;
+    else if ($("storage-used")) $("storage-used").title = error.message;
+  } finally {
+    if (gen === storageRequest) wrap.classList.remove("busy");
+  }
+}
+
 function formatDate(seconds) {
   if (!seconds) return "—";
   return new Date(seconds * 1000).toLocaleString(undefined, {
@@ -171,6 +265,7 @@ $("settings-form").addEventListener("submit", async (event) => {
     toast("Connected", "ok");
     await loadStatus();
     await load();
+    refreshStorage();
   } catch (error) {
     hint.className = "hint error";
     hint.textContent = error.message;
@@ -334,6 +429,7 @@ async function moveItems(paths, dest) {
       delete state.children[dest];
     }
     await load();
+    refreshStorage();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -1234,6 +1330,7 @@ async function copySetOffGrid(path, name) {
     toast(`Saved ${result.name || name} off the pad grid`, "ok");
     const keep = result.path;
     await load();
+    refreshStorage();
     state.selected = new Set([keep]);
     renderRows();
   } catch (error) {
@@ -1249,6 +1346,7 @@ async function copySetToPad(path, pad, name) {
     toast(`Copied ${result.name || name} to pad ${pad}`, "ok");
     const keep = result.path;
     await load();
+    refreshStorage();
     state.selected = new Set([keep]);
     renderRows();
   } catch (error) {
@@ -1637,6 +1735,7 @@ async function uploadEntries(entries) {
   toast(`Uploaded ${written} file${written === 1 ? "" : "s"}`, failures.length ? "error" : "ok");
   for (const failure of failures.slice(0, 3)) toast(`${failure.name}: ${failure.error}`, "error");
   await load();
+  refreshStorage();
 
   if (written) {
     const result = await apiJson("/api/refresh", {}).catch(() => null);
@@ -1737,7 +1836,10 @@ $("btn-copy").onclick = async () => {
       for (const failure of (result.failed || []).slice(0, 3)) {
         toast(`${failure.name.split("/").pop()}: ${failure.error}`, "error");
       }
-      if (count) await load();
+      if (count) {
+        await load();
+        refreshStorage();
+      }
       return;
     }
     const result = await apiJson("/api/copy-to-samples", { kind: "factory", items });
@@ -1746,6 +1848,7 @@ $("btn-copy").onclick = async () => {
     for (const failure of (result.failed || []).slice(0, 3)) {
       toast(`${failure.name.split("/").pop()}: ${failure.error}`, "error");
     }
+    if (count) refreshStorage();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -1834,6 +1937,7 @@ $("btn-delete").onclick = async () => {
     const result = await apiJson("/api/delete", { kind: state.kind, items });
     toast(`Deleted ${result.removed.length}`, result.failed.length ? "error" : "ok");
     await load();
+    refreshStorage();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -2071,7 +2175,9 @@ function renderPads() {
           select.append(option);
         }
         select.onchange = () => {
-          kit.pads[index].sample = select.value || null;
+          mutateEditor("kit", () => {
+            kit.pads[index].sample = select.value || null;
+          });
           renderPads();
         };
         select.onpointerdown = (event) => event.stopPropagation();
@@ -2257,6 +2363,12 @@ function syncSliceSeconds() {
 }
 
 function setSliceBoundary(index, position) {
+  mutateEditor("kit", () => {
+    setSliceBoundaryRaw(index, position);
+  }, { coalesce: true });
+}
+
+function setSliceBoundaryRaw(index, position) {
   const slices = kit.slices;
   const n = slices.length;
   if (!n) return;
@@ -2382,6 +2494,7 @@ function bindSliceEditor() {
       try { canvas.releasePointerCapture(event.pointerId); } catch { /* already released */ }
     }
     applySliceVisuals();
+    endEditorGesture("kit");
   };
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
@@ -2448,6 +2561,12 @@ async function ensureFxCatalog() {
   if (fx.catalog) return;
   const data = await api("/api/effects/catalog");
   fx.catalog = data.effects;
+}
+
+async function ensureInstrumentCatalog() {
+  if (fx.instrumentCatalog) return;
+  const data = await api("/api/presets/catalog");
+  fx.instrumentCatalog = data.instruments || [];
 }
 
 function kitFxOption(value, label, selected) {
@@ -2549,6 +2668,7 @@ async function openKitFromFolder() {
       " · Z X C V A S D F Q W E R 1 2 3 4 to play";
     renderPads();
     $("kit").showModal();
+    beginEditor("kit");
     focusKitPads();
   } catch (error) {
     toast(error.message, "error");
@@ -2559,6 +2679,8 @@ async function loadSlicePlan() {
   const count = Number($("kit-slices").value);
   $("slice-count-label").textContent = count;
   stopKitPlayback();
+  const record = $("kit")?.open;
+  const before = record ? JSON.stringify(snapshotKit()) : null;
   try {
     const plan = await apiJson("/api/kit/plan-slices", { sample: kit.sample, count, section: kit.section });
     kit.duration = plan.duration;
@@ -2577,6 +2699,7 @@ async function loadSlicePlan() {
     kit.peaks = [];
     renderPads();
   }
+  if (before) commitEditorDiff("kit", before);
 }
 
 async function openKitFromSample() {
@@ -2600,6 +2723,7 @@ async function openKitFromSample() {
   await fillKitFxSelects();
   await loadSlicePlan();
   $("kit").showModal();
+  beginEditor("kit");
   bindSliceEditor();
   focusKitPads();
   requestAnimationFrame(() => requestAnimationFrame(drawKitWaves));
@@ -2655,6 +2779,30 @@ function kitPayload(output) {
   };
 }
 
+function bindSelectUndo(id, kind) {
+  const el = $(id);
+  if (!el) return;
+  let before = null;
+  el.addEventListener("pointerdown", () => {
+    before = JSON.stringify(snapshotEditor(kind));
+  });
+  el.addEventListener("change", () => {
+    if (before) commitEditorDiff(kind, before);
+    before = JSON.stringify(snapshotEditor(kind));
+  });
+}
+
+bindSelectUndo("kit-type", "kit");
+bindSelectUndo("kit-return-fx", "kit");
+bindSelectUndo("kit-insert-fx", "kit");
+$("kit-name").addEventListener("focus", () => {
+  editorUndo.fieldStart = JSON.stringify(snapshotKit());
+});
+$("kit-name").addEventListener("blur", () => {
+  if (editorUndo.fieldStart) commitEditorDiff("kit", editorUndo.fieldStart);
+  editorUndo.fieldStart = null;
+});
+
 $("kit-save").onclick = async () => {
   const payload = kitPayload("device");
   if (!payload.name) {
@@ -2668,6 +2816,7 @@ $("kit-save").onclick = async () => {
     if (!result.refreshed) {
       toast("Saved, but library refresh failed — restart Move to see it", "error");
     }
+    refreshStorage();
   } catch (error) {
     $("kit-hint").textContent = error.message;
   }
@@ -2705,12 +2854,210 @@ $("kit-download").onclick = async () => {
 /* ---------- effect builder ---------- */
 
 const FX_MAX = 8;
-const fx = { catalog: null, devices: [], macros: emptyFxMacros(), arm: null, live: null, scrubbing: false, liveTimer: 0, editPath: "", editFolder: "", mode: "effect", instrument: null, instruments: [] };
+const fx = { catalog: null, instrumentCatalog: null, devices: [], macros: emptyFxMacros(), arm: null, live: null, scrubbing: false, liveTimer: 0, editPath: "", editFolder: "", mode: "effect", instrument: null, instruments: [], instrumentDevices: {} };
+
+function emptyEditorUndo() {
+  return { past: [], current: null, coalescing: false, applying: false };
+}
+
+const editorUndo = {
+  kit: emptyEditorUndo(),
+  fx: emptyEditorUndo(),
+  fieldStart: null,
+};
+
+function snapshotKit() {
+  return {
+    pads: (kit.pads || []).map((pad) => ({ sample: pad.sample || null, role: pad.role || "" })),
+    slices: (kit.slices || []).map((slice) => ({
+      start: slice.start,
+      length: slice.length,
+      start_seconds: slice.start_seconds,
+      length_seconds: slice.length_seconds,
+    })),
+    name: $("kit-name")?.value || "",
+    type: $("kit-type")?.value || "",
+    returnFx: $("kit-return-fx")?.value || "",
+    insertFx: $("kit-insert-fx")?.value || "",
+    sliceCount: $("kit-slices")?.value || "",
+    selected: kitAudio.selected,
+  };
+}
+
+function applyKitSnapshot(data) {
+  kit.pads = (data.pads || []).map((pad) => ({ sample: pad.sample || null, role: pad.role || "" }));
+  kit.slices = (data.slices || []).map((slice) => ({ ...slice }));
+  if ($("kit-name")) $("kit-name").value = data.name || "";
+  if ($("kit-type") && data.type) $("kit-type").value = data.type;
+  if ($("kit-return-fx")) $("kit-return-fx").value = data.returnFx || "";
+  if ($("kit-insert-fx")) $("kit-insert-fx").value = data.insertFx || "";
+  if ($("kit-slices") && data.sliceCount != null && data.sliceCount !== "") {
+    $("kit-slices").value = data.sliceCount;
+    if ($("slice-count-label")) $("slice-count-label").textContent = data.sliceCount;
+  }
+  kitAudio.selected = data.selected;
+  syncSliceSeconds();
+  renderPads();
+}
+
+function instrumentCacheKey(item) {
+  if (!item) return "";
+  if (item.source === "upload") return "upload";
+  return `${item.source || ""}:${item.path || ""}`;
+}
+
+function rememberInstrumentDevice(item) {
+  if (item?.device) fx.instrumentDevices[instrumentCacheKey(item)] = item.device;
+}
+
+function snapshotFx() {
+  rememberInstrumentDevice(fx.instrument);
+  return {
+    name: $("fx-name")?.value || "",
+    devices: fx.devices.map((item) => ({ kind: item.kind, parameters: { ...item.parameters } })),
+    macros: fx.macros.map((slot) => ({ ...slot })),
+    instrument: fx.instrument ? {
+      name: fx.instrument.name,
+      kind: fx.instrument.kind,
+      source: fx.instrument.source,
+      path: fx.instrument.path || "",
+      parameters: { ...(fx.instrument.parameters || {}) },
+    } : null,
+  };
+}
+
+function applyFxSnapshot(data) {
+  if ($("fx-name")) $("fx-name").value = data.name || "";
+  fx.devices = (data.devices || []).map((item) => ({
+    kind: item.kind,
+    parameters: { ...(item.parameters || {}) },
+  }));
+  fx.macros = (data.macros || []).map((slot) => ({ ...slot }));
+  while (fx.macros.length < 8) {
+    fx.macros.push({ index: fx.macros.length, name: "", device: 0, param: "", min: null, max: null });
+  }
+  const meta = data.instrument;
+  fx.instrument = meta ? {
+    ...meta,
+    parameters: { ...(meta.parameters || {}) },
+    device: fx.instrumentDevices[instrumentCacheKey(meta)] || null,
+  } : null;
+  syncInstrumentSelect();
+  updateInstrumentInfo();
+  renderFxAdder();
+  renderFxChain();
+  updateFxHint();
+}
+
+function snapshotEditor(kind) {
+  return kind === "kit" ? snapshotKit() : snapshotFx();
+}
+
+function applyEditor(kind, data) {
+  if (kind === "kit") applyKitSnapshot(data);
+  else applyFxSnapshot(data);
+}
+
+function beginEditor(kind) {
+  editorUndo[kind] = emptyEditorUndo();
+  editorUndo[kind].current = JSON.stringify(snapshotEditor(kind));
+  editorUndo.fieldStart = null;
+}
+
+function commitEditorDiff(kind, before, { coalesce = false } = {}) {
+  const stack = editorUndo[kind];
+  if (stack.applying) return;
+  const after = JSON.stringify(snapshotEditor(kind));
+  if (before === after) return;
+  if (!coalesce) stack.coalescing = false;
+  if (!coalesce || !stack.coalescing) {
+    stack.past.push(before);
+    if (stack.past.length > 80) stack.past.shift();
+    if (coalesce) stack.coalescing = true;
+  }
+  stack.current = after;
+}
+
+function mutateEditor(kind, fn, opts = {}) {
+  const before = JSON.stringify(snapshotEditor(kind));
+  fn();
+  commitEditorDiff(kind, before, opts);
+}
+
+function endEditorGesture(kind) {
+  const stack = editorUndo[kind];
+  stack.coalescing = false;
+  if (!stack.applying) stack.current = JSON.stringify(snapshotEditor(kind));
+}
+
+function undoInProgressField(kind) {
+  const field = kind === "kit" ? $("kit-name") : $("fx-name");
+  if (document.activeElement !== field || !editorUndo.fieldStart) return false;
+  const now = JSON.stringify(snapshotEditor(kind));
+  if (editorUndo.fieldStart === now) return false;
+  const stack = editorUndo[kind];
+  stack.applying = true;
+  applyEditor(kind, JSON.parse(editorUndo.fieldStart));
+  stack.applying = false;
+  stack.current = editorUndo.fieldStart;
+  return true;
+}
+
+function undoEditor(kind) {
+  const stack = editorUndo[kind];
+  endEditorGesture(kind);
+  if (undoInProgressField(kind)) return true;
+  const prev = stack.past.pop();
+  if (!prev) return false;
+  stack.applying = true;
+  applyEditor(kind, JSON.parse(prev));
+  stack.current = prev;
+  stack.applying = false;
+  return true;
+}
+
+function nativeTextUndoTarget(target) {
+  const el = target?.closest?.("input, textarea");
+  if (!el) return false;
+  if (el.id === "kit-name" || el.id === "fx-name") return false;
+  const type = (el.type || "text").toLowerCase();
+  if (["range", "checkbox", "radio", "file", "number", "color"].includes(type)) return false;
+  return true;
+}
+
+async function performUndo() {
+  if ($("kit")?.open && undoEditor("kit")) {
+    toast("Undid kit change");
+    return;
+  }
+  if ($("fx")?.open && undoEditor("fx")) {
+    toast("Undid rack change");
+    return;
+  }
+  try {
+    const result = await apiJson("/api/undo", {});
+    toast(`Undid ${result.label}`, "ok");
+    await load();
+    refreshStorage();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
 
 function emptyFxMacros() {
   return Array.from({ length: 8 }, (_, index) => ({
     index, name: "", device: 0, param: "", min: null, max: null,
   }));
+}
+
+function fxOffset() {
+  return fx.mode === "preset" && fx.instrument ? 1 : 0;
+}
+
+function fxItemAt(deviceIndex) {
+  const offset = fxOffset();
+  if (offset && deviceIndex === 0) return fx.instrument;
+  return fx.devices[deviceIndex - offset] || null;
 }
 
 function fxMappableParams(spec) {
@@ -2726,7 +3073,8 @@ function fxParamSpec(kind, paramId) {
 }
 
 function fxSpec(kind) {
-  return (fx.catalog || []).find((item) => item.kind === kind);
+  return (fx.catalog || []).find((item) => item.kind === kind)
+    || (fx.instrumentCatalog || []).find((item) => item.kind === kind);
 }
 
 function fxSlotsFull() {
@@ -2748,14 +3096,16 @@ function updateFxHint() {
   } else if (fx.mode === "preset" && !fx.instrument) {
     hint.textContent = "Pick a User or Core Library instrument, or upload a preset file.";
   } else if (fx.mode === "preset" && !fx.devices.length) {
-    hint.textContent = "Instrument loaded. Add effects to stack, then click a knob to map it — or save to copy it into Presets.";
+    hint.textContent = "Click a knob, then a control on the instrument — or add effects to stack after it.";
   } else if (!fx.devices.length) {
     hint.textContent = "Add devices to the rack, then click a knob to map it.";
   } else if (fxSlotsFull()) {
     hint.textContent = `Rack is full (${FX_MAX}). Remove one to add another.`;
   } else {
     const n = fx.devices.length;
-    hint.textContent = `${n} device${n === 1 ? "" : "s"} in the rack. Drag a mapped knob to turn it, or click then a control to map.`;
+    hint.textContent = fx.mode === "preset"
+      ? "Click a knob, then a control on the instrument or an effect to map it."
+      : `${n} device${n === 1 ? "" : "s"} in the rack. Drag a mapped knob to turn it, or click then a control to map.`;
   }
 }
 
@@ -2780,7 +3130,9 @@ function addFxDevice(spec) {
     return;
   }
   const parameters = Object.fromEntries(spec.params.map((p) => [p.id, p.default]));
-  fx.devices.push({ kind: spec.kind, parameters });
+  mutateEditor("fx", () => {
+    fx.devices.push({ kind: spec.kind, parameters });
+  });
   renderFxChain();
 }
 
@@ -2789,7 +3141,7 @@ function fxCard(index) {
 }
 
 function redrawFxViz(index) {
-  const item = fx.devices[index];
+  const item = fxItemAt(index);
   const canvas = fxCard(index)?.querySelector("canvas.fx-viz");
   if (item && canvas && window.FxViz) window.FxViz.draw(canvas, item);
 }
@@ -2808,9 +3160,13 @@ function syncFxControl(index, id, value) {
 }
 
 function setFxParam(index, id, value, fromViz) {
-  const item = fx.devices[index];
+  const item = fxItemAt(index);
   if (!item) return;
-  item.parameters[id] = value;
+  if (!item.parameters) item.parameters = {};
+  if (item.parameters[id] === value) return;
+  mutateEditor("fx", () => {
+    item.parameters[id] = value;
+  }, { coalesce: Boolean(fromViz) || fx.scrubbing });
   syncFxControl(index, id, value);
   redrawFxViz(index);
   updateFxKnobDials();
@@ -2844,12 +3200,12 @@ function renderFxControl(index, spec) {
     }, true);
   }
 
-  const value = fx.devices[index].parameters[spec.id];
+  const value = fxItemAt(index)?.parameters?.[spec.id];
   if (spec.type === "bool") {
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = Boolean(value);
-    box.onchange = () => setFxParam(index, spec.id, box.checked);
+  box.onchange = () => setFxParam(index, spec.id, box.checked);
     wrap.append(box);
     return wrap;
   }
@@ -2879,15 +3235,15 @@ function renderFxControl(index, spec) {
   number.max = spec.max;
   number.step = spec.step;
   number.value = value;
-  const sync = (raw) => {
+  const sync = (raw, live) => {
     const n = Number(raw);
     if (!Number.isFinite(n)) return;
     const clamped = Math.max(spec.min, Math.min(spec.max, n));
     slider.value = clamped;
     number.value = clamped;
-    setFxParam(index, spec.id, clamped);
+    setFxParam(index, spec.id, clamped, live);
   };
-  slider.oninput = () => sync(slider.value);
+  slider.oninput = () => sync(slider.value, true);
   number.onchange = () => sync(number.value);
   wrap.append(slider, number);
   return wrap;
@@ -2907,62 +3263,58 @@ function instrumentSourceLabel(item) {
   return "Presets";
 }
 
-function renderInstrumentCard() {
-  if (fx.mode !== "preset" || !fx.instrument) return null;
-  const card = document.createElement("div");
-  card.className = "fx-card fx-instrument-card";
-  const head = document.createElement("div");
-  head.className = "fx-card-head";
-  const title = document.createElement("strong");
-  title.textContent = fx.instrument.name || fx.instrument.kind || "Instrument";
-  const meta = document.createElement("span");
-  meta.className = "fx-instrument-meta";
-  meta.textContent = [fx.instrument.kind, instrumentSourceLabel(fx.instrument)].filter(Boolean).join(" · ");
-  head.append(title, meta);
-  card.append(head);
-  return card;
-}
-
-function renderFxCard(index, item) {
+function renderFxCard(index, item, { locked = false } = {}) {
   const spec = fxSpec(item.kind);
   const card = document.createElement("div");
-  card.className = "fx-card";
+  card.className = locked ? "fx-card fx-instrument-card" : "fx-card";
   card.dataset.fxIndex = String(index);
   card.dataset.fxKind = item.kind;
   const head = document.createElement("div");
   head.className = "fx-card-head";
   const title = document.createElement("strong");
-  title.textContent = spec?.name || item.kind;
+  title.textContent = locked
+    ? (fx.instrument?.name || spec?.name || item.kind)
+    : (spec?.name || item.kind);
   const on = document.createElement("label");
   on.className = "fx-on";
   const box = document.createElement("input");
   box.type = "checkbox";
-  box.checked = item.parameters.Enabled !== false;
+  box.checked = item.parameters?.Enabled !== false;
   box.onchange = () => setFxParam(index, "Enabled", box.checked);
   on.append(box, document.createTextNode("On"));
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.textContent = "Remove";
-  remove.onclick = () => {
-    fx.devices.splice(index, 1);
-    dropFxMacroDevice(index);
-    renderFxChain();
-  };
   head.append(title, on);
-  if (fx.devices.length > 1) {
-    const up = document.createElement("button");
-    up.type = "button";
-    up.textContent = "Up";
-    up.disabled = index === 0;
-    up.onclick = () => moveFxDevice(index, -1);
-    const down = document.createElement("button");
-    down.type = "button";
-    down.textContent = "Down";
-    down.disabled = index === fx.devices.length - 1;
-    down.onclick = () => moveFxDevice(index, 1);
-    head.append(up, down);
+  if (locked) {
+    const meta = document.createElement("span");
+    meta.className = "fx-instrument-meta";
+    meta.textContent = [spec?.name || item.kind, instrumentSourceLabel(fx.instrument)].filter(Boolean).join(" · ");
+    head.append(meta);
+  } else {
+    const offset = fxOffset();
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.onclick = () => {
+      mutateEditor("fx", () => {
+        fx.devices.splice(index - offset, 1);
+        dropFxMacroDevice(index);
+      });
+      renderFxChain();
+    };
+    if (fx.devices.length > 1) {
+      const up = document.createElement("button");
+      up.type = "button";
+      up.textContent = "Up";
+      up.disabled = index <= offset;
+      up.onclick = () => moveFxDevice(index, -1);
+      const down = document.createElement("button");
+      down.type = "button";
+      down.textContent = "Down";
+      down.disabled = index >= offset + fx.devices.length - 1;
+      down.onclick = () => moveFxDevice(index, 1);
+      head.append(up, down);
+    }
+    head.append(remove);
   }
-  head.append(remove);
 
   const body = document.createElement("div");
   body.className = "fx-device";
@@ -2977,7 +3329,7 @@ function renderFxCard(index, item) {
   cap.textContent = window.FxViz?.caption(item.kind) || "";
   vizWrap.append(canvas, cap);
   if (window.FxViz) {
-    window.FxViz.bind(canvas, () => fx.devices[index], (id, value) => setFxParam(index, id, value, true));
+    window.FxViz.bind(canvas, () => fxItemAt(index), (id, value) => setFxParam(index, id, value, true));
   }
 
   const { primary, more } = window.FxViz
@@ -3005,19 +3357,25 @@ function renderFxChain() {
   if (fx.resizeObs) fx.resizeObs.disconnect();
   chain.innerHTML = "";
   chain.className = "fx-chain";
-  const instrumentCard = renderInstrumentCard();
-  if (instrumentCard) chain.append(instrumentCard);
-  if (instrumentCard && fx.devices.length) {
-    const flow = document.createElement("div");
-    flow.className = "fx-slot-flow";
-    flow.setAttribute("aria-hidden", "true");
-    chain.append(flow);
+  const offset = fxOffset();
+  if (offset) {
+    const instItem = {
+      kind: fx.instrument.kind,
+      parameters: fx.instrument.parameters || {},
+    };
+    chain.append(renderFxCard(0, instItem, { locked: true }));
+    if (fx.devices.length) {
+      const flow = document.createElement("div");
+      flow.className = "fx-slot-flow";
+      flow.setAttribute("aria-hidden", "true");
+      chain.append(flow);
+    }
   }
   if (!fx.devices.length) {
     const empty = document.createElement("div");
     empty.className = "fx-empty";
     empty.innerHTML = fx.mode === "preset"
-      ? "<strong>No effects yet</strong><span>Add effects to stack after the instrument. Macros map onto those effects.</span>"
+      ? "<strong>No effects yet</strong><span>Add effects to stack after the instrument. Macros map onto the instrument and those effects.</span>"
       : "<strong>Empty rack</strong><span>Add an effect above. The whole chain saves as one device on Move.</span>";
     chain.append(empty);
   } else {
@@ -3028,7 +3386,7 @@ function renderFxChain() {
         flow.setAttribute("aria-hidden", "true");
         chain.append(flow);
       }
-      chain.append(renderFxCard(index, item));
+      chain.append(renderFxCard(index + offset, item));
     });
   }
 
@@ -3040,23 +3398,29 @@ function renderFxChain() {
       }
     });
   }
-  for (let index = 0; index < fx.devices.length; index++) {
-    const canvas = fxCard(index)?.querySelector("canvas.fx-viz");
-    if (!canvas) continue;
+  chain.querySelectorAll("[data-fx-index]").forEach((cardEl) => {
+    const index = Number(cardEl.dataset.fxIndex);
+    const canvas = cardEl.querySelector("canvas.fx-viz");
+    if (!canvas) return;
     fx.resizeObs.observe(canvas);
     redrawFxViz(index);
     requestAnimationFrame(() => redrawFxViz(index));
-  }
+  });
   renderFxAdder();
   updateFxHint();
   renderFxMacros();
 }
 
 function moveFxDevice(index, delta) {
+  const offset = fxOffset();
   const next = index + delta;
-  if (next < 0 || next >= fx.devices.length) return;
-  [fx.devices[index], fx.devices[next]] = [fx.devices[next], fx.devices[index]];
-  swapFxMacroDevices(index, next);
+  if (index < offset || next < offset || next >= offset + fx.devices.length) return;
+  const a = index - offset;
+  const b = next - offset;
+  mutateEditor("fx", () => {
+    [fx.devices[a], fx.devices[b]] = [fx.devices[b], fx.devices[a]];
+    swapFxMacroDevices(index, next);
+  });
   renderFxChain();
 }
 
@@ -3084,7 +3448,7 @@ function dropFxMacroDevice(index) {
 function applyFxMacroParam(slot, deviceIndex, paramId) {
   slot.device = deviceIndex;
   slot.param = paramId;
-  const item = fx.devices[deviceIndex];
+  const item = fxItemAt(deviceIndex);
   const spec = item ? fxParamSpec(item.kind, paramId) : null;
   if (!spec) {
     slot.name = "";
@@ -3103,7 +3467,7 @@ function applyFxMacroParam(slot, deviceIndex, paramId) {
 }
 
 function fillFxMacrosFromDevice(deviceIndex) {
-  const item = fx.devices[deviceIndex];
+  const item = fxItemAt(deviceIndex);
   const spec = fxSpec(item?.kind);
   const knobs = spec?.knobs || fxMappableParams(spec).map((p) => p.id);
   const used = new Set(fx.macros.filter((s) => s.param).map((s) => `${s.device}:${s.param}`));
@@ -3120,18 +3484,21 @@ function fillFxMacrosFromDevice(deviceIndex) {
 }
 
 function fillFxMacrosFromChain() {
-  fx.arm = null;
-  fx.macros = emptyFxMacros();
-  fx.devices.forEach((_, index) => fillFxMacrosFromDevice(index));
+  mutateEditor("fx", () => {
+    fx.arm = null;
+    fx.macros = emptyFxMacros();
+    if (fxOffset()) fillFxMacrosFromDevice(0);
+    fx.devices.forEach((_, index) => fillFxMacrosFromDevice(index + fxOffset()));
+  });
   renderFxChain();
 }
 
 function fxMacroPosition(slot) {
   if (!slot.param) return 0;
-  const item = fx.devices[slot.device];
+  const item = fxItemAt(slot.device);
   const spec = item ? fxParamSpec(item.kind, slot.param) : null;
   if (!spec) return 0;
-  const value = item.parameters[slot.param];
+  const value = item.parameters?.[slot.param];
   if (spec.type === "bool") return value ? 1 : 0;
   const lo = slot.min ?? spec.min;
   const hi = slot.max ?? spec.max;
@@ -3160,10 +3527,10 @@ function fxFormatValue(spec, value) {
 
 function fxMacroValueText(slot) {
   if (!slot.param) return "";
-  const item = fx.devices[slot.device];
+  const item = fxItemAt(slot.device);
   const spec = item ? fxParamSpec(item.kind, slot.param) : null;
   if (!spec) return "";
-  return fxFormatValue(spec, item.parameters[slot.param]);
+  return fxFormatValue(spec, item.parameters?.[slot.param]);
 }
 
 function snapFxValue(spec, lo, hi, value) {
@@ -3183,7 +3550,7 @@ function snapFxValue(spec, lo, hi, value) {
 
 function setFxMacroPosition(slot, pos) {
   if (!slot.param) return;
-  const item = fx.devices[slot.device];
+  const item = fxItemAt(slot.device);
   const spec = item ? fxParamSpec(item.kind, slot.param) : null;
   if (!item || !spec) return;
   const t = Math.max(0, Math.min(1, Number(pos) || 0));
@@ -3201,7 +3568,7 @@ function fxParamEl(deviceIndex, paramId) {
 }
 
 function updateFxLiveCaption(slot) {
-  const item = fx.devices[slot.device];
+  const item = fxItemAt(slot.device);
   const spec = item ? fxParamSpec(item.kind, slot.param) : null;
   const cap = fxCard(slot.device)?.querySelector(".fx-viz-cap");
   if (!cap || !spec) return;
@@ -3209,7 +3576,7 @@ function updateFxLiveCaption(slot) {
 }
 
 function restoreFxCaption(slot) {
-  const item = slot ? fx.devices[slot.device] : null;
+  const item = slot ? fxItemAt(slot.device) : null;
   const cap = item ? fxCard(slot.device)?.querySelector(".fx-viz-cap") : null;
   if (cap) cap.textContent = window.FxViz?.caption(item.kind) || "";
 }
@@ -3263,18 +3630,20 @@ function fadeFxLive() {
 
 function fxMacroSource(slot) {
   if (!slot.param) return "";
-  const item = fx.devices[slot.device];
+  const item = fxItemAt(slot.device);
   const spec = item ? fxParamSpec(item.kind, slot.param) : null;
   const device = item ? (fxSpec(item.kind)?.name || item.kind) : "";
   return spec ? `${device} · ${spec.label}` : device;
 }
 
 function clearFxMacro(slot) {
-  slot.param = "";
-  slot.name = "";
-  slot.min = null;
-  slot.max = null;
-  slot.device = 0;
+  mutateEditor("fx", () => {
+    slot.param = "";
+    slot.name = "";
+    slot.min = null;
+    slot.max = null;
+    slot.device = 0;
+  });
 }
 
 function setFxArm(index) {
@@ -3291,16 +3660,22 @@ function mapArmedMacro(deviceIndex, spec) {
     return;
   }
   const slot = fx.macros[fx.arm];
-  for (const other of fx.macros) {
-    if (other !== slot && other.device === deviceIndex && other.param === spec.id) {
-      clearFxMacro(other);
+  mutateEditor("fx", () => {
+    for (const other of fx.macros) {
+      if (other !== slot && other.device === deviceIndex && other.param === spec.id) {
+        other.param = "";
+        other.name = "";
+        other.min = null;
+        other.max = null;
+        other.device = 0;
+      }
     }
-  }
-  slot.name = "";
-  slot.min = null;
-  slot.max = null;
-  applyFxMacroParam(slot, deviceIndex, spec.id);
-  fx.arm = null;
+    slot.name = "";
+    slot.min = null;
+    slot.max = null;
+    applyFxMacroParam(slot, deviceIndex, spec.id);
+    fx.arm = null;
+  });
   $("fx").classList.remove("mapping");
   renderFxChain();
 }
@@ -3494,7 +3869,10 @@ function renderFxMacros() {
     name.onclick = (event) => event.stopPropagation();
     name.ondblclick = (event) => event.stopPropagation();
     name.onpointerdown = (event) => event.stopPropagation();
-    name.oninput = () => { slot.name = name.value; };
+    name.oninput = () => {
+      mutateEditor("fx", () => { slot.name = name.value; }, { coalesce: true });
+    };
+    name.onblur = () => endEditorGesture("fx");
 
     bindFxKnobGestures(wrap, slot);
 
@@ -3550,7 +3928,12 @@ function applyFxMacros(entries) {
 async function showFxDialog({ name, devices, macros, path, folder, mode, instrument }) {
   await ensureFxCatalog();
   fx.mode = mode === "preset" ? "preset" : "effect";
-  fx.instrument = instrument || null;
+  if (fx.mode === "preset") await ensureInstrumentCatalog();
+  fx.instrument = instrument ? {
+    ...instrument,
+    parameters: { ...(instrument.parameters || {}) },
+  } : null;
+  rememberInstrumentDevice(fx.instrument);
   fx.devices = (devices || []).map((item) => ({
     kind: item.kind,
     parameters: { ...(item.parameters || {}) },
@@ -3566,15 +3949,16 @@ async function showFxDialog({ name, devices, macros, path, folder, mode, instrum
   $("fx-name").placeholder = fx.mode === "preset" ? "My Preset" : "My Effect";
   $("fx-save").textContent = fx.editPath ? "Save changes" : "Save to Move";
   $("fx-instrument").hidden = fx.mode !== "preset";
+  updateFxHint();
+  renderFxAdder();
+  renderFxChain();
+  $("fx").showModal();
+  beginEditor("fx");
   if (fx.mode === "preset") {
     await populateInstrumentSelect();
     syncInstrumentSelect();
     updateInstrumentInfo();
   }
-  updateFxHint();
-  renderFxAdder();
-  renderFxChain();
-  $("fx").showModal();
 }
 
 function resetFxEditor() {
@@ -3584,6 +3968,7 @@ function resetFxEditor() {
   fx.editFolder = "";
   fx.mode = "effect";
   fx.instrument = null;
+  fx.instrumentDevices = {};
   clearFxLive();
   $("fx-save").textContent = "Save to Move";
   $("fx-instrument").hidden = true;
@@ -3592,7 +3977,7 @@ function resetFxEditor() {
 function fxPayload(output) {
   const base = {
     name: $("fx-name").value.trim(),
-    folder: fx.editPath ? fx.editFolder : destFolder(),
+    folder: fx.editPath ? fx.editFolder : (state.kind === "presets" || state.kind === "effects" ? destFolder() : ""),
     replace: fx.editPath || "",
     output,
     devices: fx.devices.map((item) => ({ kind: item.kind, parameters: item.parameters })),
@@ -3609,8 +3994,8 @@ function fxPayload(output) {
   };
   if (fx.mode === "preset") {
     base.instrument = fx.instrument?.source === "upload"
-      ? { source: "upload", path: "", preset: fx.instrument.device }
-      : { source: fx.instrument?.source || "presets", path: fx.instrument?.path || "", preset: null };
+      ? { source: "upload", path: "", preset: fx.instrument.device, parameters: { ...(fx.instrument.parameters || {}) } }
+      : { source: fx.instrument?.source || "presets", path: fx.instrument?.path || "", preset: null, parameters: { ...(fx.instrument?.parameters || {}) } };
   }
   return base;
 }
@@ -3622,42 +4007,48 @@ function instrumentChoiceValue(item) {
 async function populateInstrumentSelect() {
   const select = $("fx-instrument-select");
   if (!select) return;
+  const onchange = select.onchange;
+  select.onchange = null;
   try {
-    const data = await api("/api/presets/instruments");
-    fx.instruments = data.instruments || [];
-  } catch (error) {
-    fx.instruments = [];
-    toast(error.message, "error");
-  }
-  const current = fx.instrument && fx.instrument.source !== "upload" && fx.instrument.path
-    ? instrumentChoiceValue(fx.instrument)
-    : "";
-  select.innerHTML = "";
-  select.append(kitFxOption("", "Pick an instrument…", !current && fx.instrument?.source !== "upload"));
-  const groups = [
-    { source: "presets", label: "User library" },
-    { source: "factory", label: "Core Library" },
-  ];
-  for (const group of groups) {
-    const items = fx.instruments.filter((item) => item.source === group.source);
-    const optgroup = document.createElement("optgroup");
-    optgroup.label = group.label;
-    if (!items.length) {
-      const empty = kitFxOption("", group.source === "factory" ? "No Core Library instruments" : "No user presets", false);
-      empty.disabled = true;
-      optgroup.append(empty);
-    } else {
-      for (const item of items) {
-        optgroup.append(kitFxOption(instrumentChoiceValue(item), item.label || item.name, instrumentChoiceValue(item) === current));
-      }
+    try {
+      const data = await api("/api/presets/instruments");
+      fx.instruments = data.instruments || [];
+    } catch (error) {
+      fx.instruments = [];
+      toast(error.message, "error");
     }
-    select.append(optgroup);
+    const current = fx.instrument && fx.instrument.source !== "upload" && fx.instrument.path
+      ? instrumentChoiceValue(fx.instrument)
+      : "";
+    select.innerHTML = "";
+    select.append(kitFxOption("", "Pick an instrument…", !current && fx.instrument?.source !== "upload"));
+    const groups = [
+      { source: "presets", label: "User library" },
+      { source: "factory", label: "Core Library" },
+    ];
+    for (const group of groups) {
+      const items = fx.instruments.filter((item) => item.source === group.source);
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = group.label;
+      if (!items.length) {
+        const empty = kitFxOption("", group.source === "factory" ? "No Core Library instruments" : "No user presets", false);
+        empty.disabled = true;
+        optgroup.append(empty);
+      } else {
+        for (const item of items) {
+          optgroup.append(kitFxOption(instrumentChoiceValue(item), item.label || item.name, instrumentChoiceValue(item) === current));
+        }
+      }
+      select.append(optgroup);
+    }
+    if (fx.instrument?.source === "upload") {
+      const uploaded = kitFxOption("upload:", fx.instrument.name || "Uploaded instrument", true);
+      select.append(uploaded);
+    }
+    syncInstrumentSelect();
+  } finally {
+    select.onchange = onchange;
   }
-  if (fx.instrument?.source === "upload") {
-    const uploaded = kitFxOption("upload:", fx.instrument.name || "Uploaded instrument", true);
-    select.append(uploaded);
-  }
-  syncInstrumentSelect();
 }
 
 function syncInstrumentSelect() {
@@ -3681,21 +4072,24 @@ function updateInstrumentInfo() {
 }
 
 function applyLoadedInstrument(data, { keepName = false } = {}) {
-  fx.instrument = {
-    name: data.name,
-    kind: data.kind,
-    source: data.source,
-    path: data.path || "",
-    device: data.instrument,
-  };
-  fx.devices = (data.effects || []).map((item) => ({
-    kind: item.kind,
-    parameters: { ...(item.parameters || {}) },
-  }));
-  applyFxMacros(data.macros || []);
-  if (!keepName && data.name && (!$("fx-name").value || $("fx-name").value === "My Preset")) {
-    $("fx-name").value = data.name;
-  }
+  mutateEditor("fx", () => {
+    fx.instrument = {
+      name: data.name,
+      kind: data.kind,
+      source: data.source,
+      path: data.path || "",
+      device: data.instrument,
+      parameters: { ...(data.parameters || {}) },
+    };
+    rememberInstrumentDevice(fx.instrument);
+    fx.devices = (data.effects || []).map((item) => ({
+      kind: item.kind,
+      parameters: { ...(item.parameters || {}) },
+    }));
+    applyFxMacros(data.macros || []);
+    const currentName = $("fx-name")?.value || "";
+    if (!keepName && data.name && !currentName) $("fx-name").value = data.name;
+  });
   updateInstrumentInfo();
   updateFxHint();
   renderFxAdder();
@@ -3704,9 +4098,11 @@ function applyLoadedInstrument(data, { keepName = false } = {}) {
 
 async function loadInstrumentChoice(value) {
   if (!value) {
-    fx.instrument = null;
-    fx.devices = [];
-    applyFxMacros([]);
+    mutateEditor("fx", () => {
+      fx.instrument = null;
+      fx.devices = [];
+      applyFxMacros([]);
+    });
     updateInstrumentInfo();
     updateFxHint();
     renderFxChain();
@@ -3740,6 +4136,7 @@ async function openPresetBuilder() {
 async function openPresetEditor(path) {
   try {
     await ensureFxCatalog();
+    await ensureInstrumentCatalog();
     const data = await api(`/api/presets/load?source=presets&path=${encodeURIComponent(path)}`);
     await showFxDialog({
       mode: "preset",
@@ -3754,6 +4151,7 @@ async function openPresetEditor(path) {
         source: data.source,
         path: data.path || path,
         device: data.instrument,
+        parameters: { ...(data.parameters || {}) },
       },
     });
   } catch (error) {
@@ -3797,6 +4195,13 @@ $("fx-cancel").onclick = () => {
   resetFxEditor();
   $("fx").close();
 };
+$("fx-name").addEventListener("focus", () => {
+  editorUndo.fieldStart = JSON.stringify(snapshotFx());
+});
+$("fx-name").addEventListener("blur", () => {
+  if (editorUndo.fieldStart) commitEditorDiff("fx", editorUndo.fieldStart);
+  editorUndo.fieldStart = null;
+});
 $("fx").addEventListener("close", resetFxEditor);
 $("fx").addEventListener("cancel", (event) => {
   if (fx.arm == null && !fx.scrubbing && fx.live == null) return;
@@ -3836,6 +4241,7 @@ $("fx-save").onclick = async () => {
       toast("Saved, but library refresh failed — restart Move to see it", "error");
     }
     if (state.kind === "effects" || state.kind === "presets") await load();
+    refreshStorage();
   } catch (error) {
     $("fx-hint").textContent = error.message;
   }
@@ -3873,5 +4279,31 @@ $("fx-download").onclick = async () => {
 
 /* ---------- boot ---------- */
 
+document.addEventListener("keydown", (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  if (event.key.toLowerCase() !== "z") return;
+  if (nativeTextUndoTarget(event.target)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.repeat) return;
+  performUndo();
+}, true);
+
+window.addEventListener("pointerup", () => {
+  endEditorGesture("fx");
+  endEditorGesture("kit");
+});
+window.addEventListener("pointercancel", () => {
+  endEditorGesture("fx");
+  endEditorGesture("kit");
+});
+
 document.querySelector(".tab").classList.add("active");
-loadStatus().then(load);
+if ($("storage")) {
+  $("storage").addEventListener("click", () => refreshStorage());
+  $("storage").title = "Click to refresh storage";
+}
+loadStatus().then(() => {
+  load();
+  refreshStorage();
+});

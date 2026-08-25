@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Move My Ass</title>
 <link rel="icon" href="/static/logo.png?v=glitch3">
-<link rel="stylesheet" href="/static/style.css?v=preset2">
+<link rel="stylesheet" href="/static/style.css?v=presetfix1">
 </head>
 <body>
 <header class="topbar">
@@ -15,6 +15,13 @@
   <div class="conn" id="conn">
     <span class="dot" id="conn-dot"></span>
     <span id="conn-text">checking…</span>
+  </div>
+  <div class="storage" id="storage" hidden>
+    <div class="storage-bar" id="storage-bar" role="img" aria-label="Device storage"></div>
+    <div class="storage-row">
+      <span class="storage-used" id="storage-used">Measuring storage…</span>
+      <span class="storage-legend" id="storage-legend"></span>
+    </div>
   </div>
   <div class="topbar-actions">
     <button id="btn-refresh-library" class="ghost" title="Make Move rescan its library so new files appear on the device">Refresh device library</button>
@@ -249,9 +256,9 @@
   <div class="fx-foot">
     <p class="hint" id="fx-hint">Add devices to the rack, then click a knob to map it.</p>
     <menu>
-      <button id="fx-cancel" class="ghost">Cancel</button>
-      <button id="fx-download" class="ghost">Download</button>
-      <button id="fx-save" class="primary">Save to Move</button>
+      <button type="button" id="fx-cancel" class="ghost">Cancel</button>
+      <button type="button" id="fx-download" class="ghost">Download</button>
+      <button type="button" id="fx-save" class="primary">Save to Move</button>
     </menu>
   </div>
 </dialog>
@@ -263,7 +270,7 @@
 </footer>
 
 <div id="toasts"></div>
-<script src="/static/fx-viz.js?v=fxnew1"></script>
-<script src="/static/app.js?v=preset2"></script>
+<script src="/static/fx-viz.js?v=inst1"></script>
+<script src="/static/app.js?v=presetfix1"></script>
 </body>
 </html>

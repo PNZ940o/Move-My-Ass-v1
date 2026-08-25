@@ -11,9 +11,10 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from .config import PROJECT_ROOT
-from .move import effects, kits, library, paths, presets, sets
+from .move import effects, instruments, kits, library, paths, presets, sets, storage, undo
 from .move.backend import MoveBackend
 from .move.pad_colors import PAD_COLORS, hex_color
 from .move.paths import UnsafePath
@@ -36,6 +37,10 @@ def require_writable(kind: str) -> None:
         raise HTTPException(status_code=403, detail="factory library is read-only")
 
 
+def commit_undo(builder: undo.Builder) -> None:
+    builder.commit(session.undo)
+
+
 @app.exception_handler(UnsafePath)
 async def unsafe_path_handler(request: Request, exc: UnsafePath) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
@@ -56,6 +61,15 @@ async def index(request: Request):
 @app.get("/api/status")
 async def status():
     return session.status()
+
+
+@app.get("/api/storage")
+async def device_storage():
+    try:
+        backend = get_backend()
+        return await run_in_threadpool(storage.usage, backend)
+    except storage.StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class ConnectRequest(BaseModel):
@@ -98,20 +112,29 @@ async def upload(
     require_writable(kind)
     backend = get_backend()
     written, failed = [], []
+    dest_folder = (dest or "").replace("\\", "/").strip("/")
+    label = "upload" if len(files) != 1 else posixpath.basename(
+        (relpaths[0] if relpaths else files[0].filename) or "file"
+    )
+    builder = undo.Builder(backend, f"Upload {label}" if len(files) == 1 else f"Upload {len(files)} files")
 
     for index, upload_file in enumerate(files):
         name = upload_file.filename or f"upload-{index}"
         relative = relpaths[index] if index < len(relpaths) and relpaths[index] else name
         relative = relative.replace("\\", "/").lstrip("/")
+        mark = builder.checkpoint()
         try:
-            target = paths.resolve(kind, posixpath.join(dest, relative))
+            target = paths.resolve(kind, posixpath.join(dest_folder, relative))
+            builder.will_overwrite(target)
             backend.write_file(target, await upload_file.read())
             written.append(relative)
         except Exception as exc:
+            builder.revert_to(mark)
             failed.append({"name": relative, "error": f"{type(exc).__name__}: {exc}"})
         finally:
             await upload_file.close()
 
+    commit_undo(builder)
     return {"written": written, "failed": failed, "count": len(written)}
 
 
@@ -126,7 +149,13 @@ async def mkdir(body: PathRequest):
     target = paths.resolve(body.kind, body.path)
     if target == paths.LIBRARY_ROOTS[body.kind]:
         raise HTTPException(status_code=400, detail="give the folder a name")
-    get_backend().makedirs(target)
+    backend = get_backend()
+    existed = backend.exists(target)
+    backend.makedirs(target)
+    if not existed:
+        builder = undo.Builder(backend, f"New folder {posixpath.basename(target)}")
+        builder.created(target)
+        commit_undo(builder)
     return {"ok": True, "path": target}
 
 
@@ -140,12 +169,23 @@ async def delete(body: DeleteRequest):
     require_writable(body.kind)
     backend = get_backend()
     removed, failed = [], []
+    label = (
+        f"Delete {posixpath.basename(body.items[0])}"
+        if len(body.items) == 1
+        else f"Delete {len(body.items)} items"
+    )
+    builder = undo.Builder(backend, label)
     for item in body.items:
+        mark = builder.checkpoint()
         try:
-            backend.remove(paths.resolve(body.kind, item))
+            target = paths.resolve(body.kind, item)
+            builder.will_remove(target)
+            backend.remove(target)
             removed.append(item)
         except Exception as exc:
+            builder.revert_to(mark)
             failed.append({"name": item, "error": f"{type(exc).__name__}: {exc}"})
+    commit_undo(builder)
     return {"removed": removed, "failed": failed}
 
 
@@ -181,12 +221,17 @@ async def rename(body: RenameRequest):
     # A set's UUID folder is not the name Move shows. Rename the inner folder.
     at_sets_root = body.kind == "sets" and "/" not in body.path.strip("/")
     if at_sets_root and sets.is_set_uuid(body.path) and backend.is_dir(source):
+        old_name = sets._inner_name(backend, body.path)
         try:
             name = sets.rename_set(backend, body.path, name)
         except FileExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if name != old_name:
+            builder = undo.Builder(backend, f"Rename {old_name}")
+            builder.will_rename_set(body.path, old_name)
+            commit_undo(builder)
         return {"ok": True, "name": name}
 
     if not backend.is_dir(source):
@@ -196,7 +241,11 @@ async def rename(body: RenameRequest):
     if target != source and backend.exists(target):
         raise HTTPException(status_code=409, detail=f"{name} already exists")
 
-    backend.rename(source, target)
+    if target != source:
+        builder = undo.Builder(backend, f"Rename {posixpath.basename(source)}")
+        builder.will_rename(source, target)
+        backend.rename(source, target)
+        commit_undo(builder)
     return {"ok": True, "name": name}
 
 
@@ -218,14 +267,21 @@ class SetColorRequest(BaseModel):
 @app.post("/api/set-color")
 async def change_set_color(body: SetColorRequest):
     """Set the LED colour on a pad set. Does not move the set on the grid."""
+    backend = get_backend()
+    meta = sets.collect(backend).get(body.path)
+    previous = meta.color_id if meta and meta.color_id is not None else 1
     try:
-        color_id = sets.set_color(get_backend(), body.path, body.color_id)
+        color_id = sets.set_color(backend, body.path, body.color_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if color_id != previous:
+        builder = undo.Builder(backend, "Pad color")
+        builder.will_set_color(body.path, previous)
+        commit_undo(builder)
     return {"ok": True, "color_id": color_id, "color": hex_color(color_id)}
 
 
@@ -237,11 +293,12 @@ class CopySetRequest(BaseModel):
 @app.post("/api/copy-set")
 async def copy_set(body: CopySetRequest):
     """Duplicate a set onto an empty pad, or off the grid when pad is omitted."""
+    backend = get_backend()
     try:
         if body.pad is None:
-            copied = sets.copy_off_grid(get_backend(), body.path)
+            copied = sets.copy_off_grid(backend, body.path)
         else:
-            copied = sets.copy_to_pad(get_backend(), body.path, body.pad)
+            copied = sets.copy_to_pad(backend, body.path, body.pad)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except FileExistsError as exc:
@@ -250,6 +307,9 @@ async def copy_set(body: CopySetRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    builder = undo.Builder(backend, f"Copy {copied.get('name') or 'set'}")
+    builder.created(posixpath.join(paths.SETS, copied["path"]))
+    commit_undo(builder)
     return {"ok": True, **copied}
 
 
@@ -272,7 +332,14 @@ async def move_items(body: MoveRequest):
         raise HTTPException(status_code=400, detail="destination is not a folder")
 
     moved, failed = [], []
+    builder = undo.Builder(
+        backend,
+        f"Move {posixpath.basename(body.items[0])}"
+        if len(body.items) == 1
+        else f"Move {len(body.items)} items",
+    )
     for item in body.items:
+        mark = builder.checkpoint()
         try:
             source = paths.resolve(body.kind, item)
             name = posixpath.basename(source)
@@ -293,11 +360,14 @@ async def move_items(body: MoveRequest):
             if backend.exists(target):
                 raise FileExistsError(f"{name} already exists there")
 
+            builder.will_rename(source, target)
             backend.rename(source, target)
             moved.append(item)
         except Exception as exc:
+            builder.revert_to(mark)
             failed.append({"name": item, "error": str(exc)})
 
+    commit_undo(builder)
     if moved:
         backend.refresh_library()
     return {"moved": moved, "failed": failed}
@@ -318,9 +388,20 @@ async def copy_to_samples(body: CopyToSamplesRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dest = (body.dest or "Factory").strip("/")
     if copied:
-        get_backend().refresh_library()
-    return {"copied": copied, "failed": failed, "dest": (body.dest or "Factory").strip("/")}
+        backend = get_backend()
+        builder = undo.Builder(
+            backend,
+            f"Copy to Samples"
+            if len(copied) != 1
+            else f"Copy {posixpath.basename(copied[0])}",
+        )
+        for item in copied:
+            builder.created(paths.resolve("samples", posixpath.join(dest, item)))
+        commit_undo(builder)
+        backend.refresh_library()
+    return {"copied": copied, "failed": failed, "dest": dest}
 
 
 class MoveToSamplesRequest(BaseModel):
@@ -338,9 +419,22 @@ async def move_to_samples(body: MoveToSamplesRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    dest = (body.dest or "Recordings").strip("/")
     if moved:
-        get_backend().refresh_library()
-    return {"moved": moved, "failed": failed, "dest": (body.dest or "Recordings").strip("/")}
+        backend = get_backend()
+        builder = undo.Builder(
+            backend,
+            "Move to Samples"
+            if len(moved) != 1
+            else f"Move {posixpath.basename(moved[0])}",
+        )
+        for item in moved:
+            source = paths.resolve("recordings", item)
+            target = paths.resolve("samples", posixpath.join(dest, item))
+            builder.will_rename(source, target)
+        commit_undo(builder)
+        backend.refresh_library()
+    return {"moved": moved, "failed": failed, "dest": dest}
 
 
 @app.get("/api/download")
@@ -678,7 +772,10 @@ async def kit_build(body: KitBuildRequest):
     preset = _kit_preset(name, pads, body, backend)
 
     target = paths.resolve("presets", f"{name}.ablpreset")
+    builder = undo.Builder(backend, f"Save kit {name}")
+    builder.will_overwrite(target)
     backend.write_file(target, json.dumps(preset, indent=2).encode("utf-8"))
+    commit_undo(builder)
     refresh_result = backend.refresh_library()
 
     return {
@@ -786,9 +883,14 @@ async def effect_build(body: EffectBuildRequest):
     replacing = paths.resolve("effects", replace) if replace else None
     if backend.exists(target) and target != replacing:
         raise HTTPException(status_code=409, detail=f"{filename} already exists")
+    builder = undo.Builder(backend, f"Save effect {name}")
+    builder.will_overwrite(target)
+    if replacing and replacing != target:
+        builder.will_remove(replacing)
     backend.write_file(target, payload)
     if replacing and replacing != target and backend.exists(replacing):
         backend.remove(replacing)
+    commit_undo(builder)
     refresh_result = backend.refresh_library()
     return {
         "ok": True,
@@ -804,6 +906,7 @@ class TrackInstrumentRef(BaseModel):
     source: str = "presets"
     path: str = ""
     preset: dict | None = None
+    parameters: dict = {}
 
 
 class TrackPresetBuildRequest(BaseModel):
@@ -821,6 +924,11 @@ async def preset_instruments():
     return {"instruments": presets.list_instruments(get_backend())}
 
 
+@app.get("/api/presets/catalog")
+async def preset_catalog():
+    return {"instruments": instruments.catalog()}
+
+
 @app.get("/api/presets/load")
 async def preset_load(source: str, path: str):
     try:
@@ -833,6 +941,7 @@ async def preset_load(source: str, path: str):
         "source": loaded["source"],
         "path": loaded["path"],
         "instrument": loaded["device"],
+        "parameters": loaded.get("parameters") or {},
         "effects": loaded["effects"],
         "macros": loaded.get("macros") or [],
         "folder": posixpath.dirname(loaded["path"]) if loaded["source"] == "presets" else "",
@@ -853,6 +962,7 @@ async def preset_parse(body: TrackInstrumentRef):
         "source": loaded["source"],
         "path": loaded["path"],
         "instrument": loaded["device"],
+        "parameters": loaded.get("parameters") or {},
         "effects": loaded["effects"],
         "macros": loaded.get("macros") or [],
         "folder": "",
@@ -883,6 +993,7 @@ async def preset_build(body: TrackPresetBuildRequest):
                 }
                 for item in body.macros
             ],
+            body.instrument.parameters,
         )
     except (presets.PresetError, UnsafePath) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -904,9 +1015,14 @@ async def preset_build(body: TrackPresetBuildRequest):
     replacing = paths.resolve("presets", replace) if replace else None
     if backend.exists(target) and target != replacing:
         raise HTTPException(status_code=409, detail=f"{filename} already exists")
+    builder = undo.Builder(backend, f"Save preset {name}")
+    builder.will_overwrite(target)
+    if replacing and replacing != target:
+        builder.will_remove(replacing)
     backend.write_file(target, payload)
     if replacing and replacing != target and backend.exists(replacing):
         backend.remove(replacing)
+    commit_undo(builder)
     refresh_result = backend.refresh_library()
     return {
         "ok": True,
@@ -916,6 +1032,20 @@ async def preset_build(body: TrackPresetBuildRequest):
         "refreshed": refresh_result.ok,
         "refresh_error": None if refresh_result.ok else refresh_result.stderr.strip(),
     }
+
+
+@app.get("/api/undo")
+async def undo_status():
+    return session.undo.peek()
+
+
+@app.post("/api/undo")
+async def undo_last():
+    try:
+        label = undo.apply(get_backend(), session.undo)
+    except undo.UndoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "label": label}
 
 
 @app.post("/api/refresh")

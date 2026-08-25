@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import posixpath
 
-from . import effects, paths
+from . import effects, instruments, paths
 
 SCHEMA = effects.SCHEMA
 LOCK_ID = effects.LOCK_ID
@@ -95,11 +95,14 @@ def extract_instrument(payload: dict) -> dict:
         raise PresetError("that's an audio effect — pick an instrument")
 
     if kind != "instrumentRack":
+        synth = instruments.parse_synth(payload)
         return {
-            "name": str(payload.get("name") or kind),
-            "kind": kind,
+            "name": str(payload.get("name") or synth["kind"] or kind),
+            "kind": synth["kind"] or kind,
             "device": payload,
+            "parameters": synth["parameters"],
             "effects": [],
+            "macros": synth["macros"],
         }
 
     chains = payload.get("chains") or []
@@ -145,7 +148,9 @@ def extract_instrument(payload: dict) -> dict:
             expanded_fx.append(fx_device)
     catalog_fx = [item for item in expanded_fx if (item or {}).get("kind") in effects.BY_KIND]
     parsed_fx: list[dict] = []
-    macros: list[dict] = []
+    synth = instruments.parse_synth(device)
+    macros: list[dict] = list(synth["macros"])
+    seen = {slot["index"] for slot in macros}
     if catalog_fx:
         fake = {
             "kind": "audioEffectRack",
@@ -155,14 +160,26 @@ def extract_instrument(payload: dict) -> dict:
         }
         parsed = effects.parse_preset(json.dumps(fake).encode())
         parsed_fx = parsed["devices"]
-        macros = parsed["macros"]
+        for slot in parsed["macros"]:
+            index = slot["index"]
+            if index in seen:
+                continue
+            seen.add(index)
+            macros.append({**slot, "device": slot["device"] + 1})
+
+    rack_params = payload.get("parameters") or {} if kind == "instrumentRack" else {}
+    for slot in macros:
+        named = rack_params.get(f"Macro{slot['index']}")
+        if isinstance(named, dict) and named.get("customName"):
+            slot["name"] = str(named["customName"]).strip()[:24] or slot["name"]
 
     return {
-        "name": str(payload.get("name") or device.get("name") or device.get("kind") or "Instrument"),
-        "kind": device.get("kind") or "instrument",
+        "name": str(payload.get("name") or device.get("name") or synth["kind"] or device.get("kind") or "Instrument"),
+        "kind": synth["kind"] or device.get("kind") or "instrument",
         "device": device,
+        "parameters": synth["parameters"],
         "effects": parsed_fx,
-        "macros": macros,
+        "macros": sorted(macros, key=lambda item: item["index"]),
     }
 
 
@@ -226,33 +243,80 @@ def list_instruments(backend, limit: int = 500) -> list[dict]:
     return found
 
 
-def build_track_preset(name: str, instrument: dict, devices: list[dict], macros: list[dict] | None = None) -> dict:
-    """instrumentRack: copied instrument, then stacked catalog effects, then macros on the FX."""
+def _macro_name(macros: list[dict] | None, index: int, fallback: str) -> str:
+    for entry in macros or []:
+        try:
+            if int(entry.get("index", -1)) != index:
+                continue
+        except (TypeError, ValueError):
+            continue
+        text = str(entry.get("name") or "").strip()
+        if text:
+            return text[:24]
+    return fallback
+
+
+def build_track_preset(
+    name: str,
+    instrument: dict,
+    devices: list[dict],
+    macros: list[dict] | None = None,
+    instrument_parameters: dict | None = None,
+) -> dict:
+    """instrumentRack: copied instrument, stacked FX, macros on instrument (0) then FX (1+)."""
     name = (name or "").strip()
     if not name:
         raise PresetError("give the preset a name")
-    device = _strip_schema(instrument or {})
+    device = json.loads(json.dumps(_strip_schema(instrument or {})))
     if not device.get("kind") or device.get("kind") in EFFECT_KINDS:
         raise PresetError("pick an instrument")
     if len(devices) > MAX_FX:
         raise PresetError(f"a rack can hold {MAX_FX} effects")
 
-    try:
-        fx_rack = effects.build_preset(
-            name,
-            devices or [{"kind": "saturator", "parameters": {"Enabled": True}}],
-            macros,
-        ) if devices else None
-    except effects.EffectError as exc:
-        raise PresetError(str(exc)) from exc
+    synth = instruments.inner_synth(device)
+    kind = (synth or {}).get("kind") or ""
+    mappings = instruments.slot_mappings(macros, kind)
+    instruments.apply_synth(device, instrument_parameters, mappings)
+
+    rack_macros: dict = {f"Macro{i}": 0.0 for i in range(8)}
+    occupied: set[int] = set()
+    merged = {**instruments.defaults_for(kind), **(instrument_parameters or {})}
+    for pid, mapping in mappings.items():
+        spec = instruments._spec_for(kind, pid)
+        if not spec:
+            continue
+        current = instruments._coerce(kind, pid, merged.get(pid, spec["default"]))
+        index = mapping["index"]
+        rack_macros[f"Macro{index}"] = {
+            "value": effects._macro_position(current, mapping["min"], mapping["max"]),
+            "customName": _macro_name(macros, index, spec["label"]),
+        }
+        occupied.add(index)
+
+    fx_macros: list[dict] = []
+    for entry in macros or []:
+        try:
+            device_index = int(entry.get("device", -1))
+        except (TypeError, ValueError) as exc:
+            raise PresetError("macro device must be a chain index") from exc
+        if device_index < 1:
+            continue
+        fx_macros.append({**entry, "device": device_index - 1})
 
     built_fx: list[dict] = []
-    rack_macros = {f"Macro{i}": 0.0 for i in range(8)}
     if devices:
+        try:
+            fx_rack = effects.build_preset(name, devices, fx_macros)
+        except effects.EffectError as exc:
+            raise PresetError(str(exc)) from exc
         built_fx = list((fx_rack.get("chains") or [{}])[0].get("devices") or [])
         params = fx_rack.get("parameters") or {}
         for i in range(8):
+            if i in occupied:
+                continue
             rack_macros[f"Macro{i}"] = params.get(f"Macro{i}", 0.0)
+    elif fx_macros:
+        raise PresetError("macro points at a missing effect")
 
     return {
         "$schema": SCHEMA,

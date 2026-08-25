@@ -83,6 +83,7 @@ body {
   display: flex;
   align-items: center;
   line-height: 0;
+  flex-shrink: 0;
 }
 .logo {
   display: block;
@@ -101,6 +102,7 @@ body {
   color: var(--dim);
   font-size: 12px;
   font-weight: 500;
+  flex-shrink: 0;
 }
 
 .dot {
@@ -113,7 +115,81 @@ body {
 .dot.off { background: var(--danger); box-shadow: 0 0 0 3px rgba(255, 58, 58, .18); }
 .dot.mock { background: var(--pink); box-shadow: 0 0 0 3px rgba(255, 61, 245, .18); }
 
-.topbar-actions { margin-left: auto; display: flex; gap: 8px; }
+.topbar-actions { margin-left: auto; display: flex; gap: 8px; flex-shrink: 0; }
+
+.storage {
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.storage[hidden] { display: none; }
+.storage.busy { opacity: .65; }
+.storage-bar {
+  display: flex;
+  height: 9px;
+  border-radius: var(--pill);
+  overflow: hidden;
+  background: #161616;
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .45);
+}
+.storage-seg {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.storage-seg.samples { background: var(--cyan); }
+.storage-seg.sets { background: var(--pink); }
+.storage-seg.presets { background: var(--violet); }
+.storage-seg.other { background: var(--amber); }
+.storage-seg.free { background: #242424; }
+.storage-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.storage-used {
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.storage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+  color: var(--faint);
+  font-size: 11px;
+}
+.storage-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.storage-legend span.empty { opacity: .42; }
+.storage-legend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.storage-legend i.samples { background: var(--cyan); }
+.storage-legend i.sets { background: var(--pink); }
+.storage-legend i.presets { background: var(--violet); }
+.storage-legend i.other { background: var(--amber); }
+@media (max-width: 980px) {
+  .storage-legend { display: none; }
+}
 
 /* ---------- buttons ---------- */
 
@@ -1266,6 +1342,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
 
 .fx-instrument {
   flex: none;
+  flex-shrink: 0;
   display: flex;
   align-items: end;
   gap: 10px;
@@ -1320,6 +1397,12 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
   color: var(--faint);
   font-size: 11px;
 }
+.fx-card[data-fx-kind="drift"] canvas.fx-viz,
+.fx-card[data-fx-kind="wavetable"] canvas.fx-viz,
+.fx-card[data-fx-kind="melodicSampler"] canvas.fx-viz,
+.fx-card[data-fx-kind="drumRack"] canvas.fx-viz {
+  cursor: crosshair;
+}
 
 #fx[open],
 #fx:modal {
@@ -1328,9 +1411,11 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
   position: fixed;
   inset: 12px;
   width: auto;
-  height: auto;
+  height: calc(100vh - 24px);
+  height: calc(100dvh - 24px);
   max-width: none;
-  max-height: none;
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
   overflow: hidden;
   padding: 0 20px 8px;
   background:
@@ -1342,6 +1427,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
 
 .fx-bar {
   flex: none;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -1583,6 +1669,7 @@ dialog input.fx-knob-name:focus {
 
 .fx-add {
   flex: none;
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
@@ -1668,6 +1755,10 @@ dialog input.fx-knob-name:focus {
   letter-spacing: -0.01em;
 }
 .fx-empty span { max-width: 28em; }
+.fx-chain:has(.fx-instrument-card) .fx-empty {
+  flex: none;
+  min-height: 72px;
+}
 .fx-card {
   background: linear-gradient(180deg, #1c1c1c 0%, #161616 100%);
   border: 1px solid #323232;
@@ -1820,6 +1911,7 @@ canvas.fx-viz {
 }
 .fx-foot {
   flex: none;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 16px;

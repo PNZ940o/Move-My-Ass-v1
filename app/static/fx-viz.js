@@ -29,6 +29,17 @@
     autoPan: ["Mode", "Modulation_Amount", "Modulation_Frequency", "Modulation_Phase", "Modulation_Waveform", "Modulation_TimeMode", "Modulation_SyncedRate", "VintageMode", "AttackTime", "DynamicFrequencyModulation"],
     autoShift: ["Global_DryWet", "PitchShift_ShiftSemitones", "PitchShift_Detune", "PitchShift_FormantShift", "Quantizer_Amount", "Quantizer_Active", "Lfo_Enabled", "Lfo_RateHz", "Modulation_LfoToPitchModAmount", "Vibrato_Amount"],
     erosion: ["Amount", "Frequency", "FilterWidth", "NoiseBlend", "StereoWidth"],
+    drift: ["Filter_Frequency", "Filter_Resonance", "Envelope1_Attack", "Envelope1_Decay", "Envelope1_Sustain", "Envelope1_Release", "Oscillator1_Shape", "Lfo_Amount"],
+    wavetable: ["Voice_Filter1_Frequency", "Voice_Filter1_Resonance", "Voice_Modulators_AmpEnvelope_Times_Attack", "Voice_Modulators_AmpEnvelope_Times_Decay", "Voice_Modulators_AmpEnvelope_Sustain", "Voice_Modulators_AmpEnvelope_Times_Release", "Voice_Oscillator1_Wavetables_WavePosition", "Volume"],
+    melodicSampler: ["Voice_Filter_Frequency", "Voice_Filter_Resonance", "Voice_AmplitudeEnvelope_Attack", "Voice_AmplitudeEnvelope_Decay", "Voice_AmplitudeEnvelope_Sustain", "Voice_AmplitudeEnvelope_Release", "Voice_Transpose", "Volume"],
+    drumRack: ["Volume", "Voice_Filter_Frequency", "Voice_Envelope_Decay", "Voice_Gain", "Voice_Transpose"],
+  };
+
+  const FILTER_PARAMS = {
+    drift: { freq: "Filter_Frequency", res: "Filter_Resonance", type: "Filter_Type" },
+    wavetable: { freq: "Voice_Filter1_Frequency", res: "Voice_Filter1_Resonance", type: "Voice_Filter1_Type", enable: "Voice_Filter1_On" },
+    melodicSampler: { freq: "Voice_Filter_Frequency", res: "Voice_Filter_Resonance", enable: "Voice_Filter_On", resMax: 90 },
+    drumRack: { freq: "Voice_Filter_Frequency", res: "Voice_Filter_Resonance", enable: "Voice_Filter_On" },
   };
 
   function p(item, id, fallback) {
@@ -894,6 +905,60 @@
     ]);
   }
 
+  function synthResNorm(item, ids) {
+    const resMax = ids.resMax || 1;
+    return clamp(p(item, ids.res, resMax * 0.2) / resMax, 0, 1);
+  }
+
+  function synthFilterMag(item, freq, ids) {
+    const f0 = p(item, ids.freq, 2000);
+    const res = synthResNorm(item, ids);
+    const q = 0.55 + res * 9;
+    const type = ids.type ? String(p(item, ids.type, "")) : "";
+    const coefs = (type === "Highpass" || type === "High-pass")
+      ? rbjHighPass(f0, q)
+      : (type === "Bandpass" || type === "Band-pass")
+        ? rbjBandPass(f0, 0.35 + res * 1.4)
+        : (type === "Notch")
+          ? rbjNotch(f0, q)
+          : rbjLowPass(f0, q);
+    return db(magBiquad(...coefs, freq));
+  }
+
+  function drawSynthFilter(ctx, w, h, item) {
+    const ids = FILTER_PARAMS[item.kind];
+    if (!ids) return;
+    freqGrid(ctx, w, h, 0, h);
+    const lo = -36;
+    const hi = 18;
+    const f0 = p(item, ids.freq, 2000);
+    const n = Math.max(80, Math.floor(w));
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const f = freqAt(i / n);
+      pts.push({ x: (i / n) * w, y: yDb(h, synthFilterMag(item, f, ids), lo, hi) });
+    }
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fillStyle = FILL;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const pt of pts) ctx.lineTo(pt.x, pt.y);
+    ctx.strokeStyle = CYAN;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    handle(ctx, logx(f0) * w, yDb(h, synthFilterMag(item, f0, ids), lo, hi), CYAN);
+    const type = ids.type ? p(item, ids.type, "Lowpass") : "Low-pass";
+    labels(ctx, w, h, [
+      { text: `${type}  ${Math.round(f0)} Hz`, x: 8, y: 14 },
+      { text: `Q ${synthResNorm(item, ids).toFixed(2)}`, x: 8, y: h - 8 },
+    ]);
+  }
+
   function drawAutoPan(ctx, w, h, item) {
     const mode = p(item, "Mode", "Panning");
     const amount = p(item, "Modulation_Amount", 0.5);
@@ -1083,6 +1148,10 @@
     autoPan: drawAutoPan,
     autoShift: drawAutoShift,
     erosion: drawErosion,
+    drift: drawSynthFilter,
+    wavetable: drawSynthFilter,
+    melodicSampler: drawSynthFilter,
+    drumRack: drawSynthFilter,
   };
 
   function caption(kind) {
@@ -1100,6 +1169,10 @@
       autoPan: "L / R modulation — drag rate and amount",
       autoShift: "Pitch shift — drag semitones and formant",
       erosion: "Noise band — drag frequency and amount",
+      drift: "Filter curve — drag cutoff and resonance",
+      wavetable: "Filter curve — drag cutoff and resonance",
+      melodicSampler: "Filter curve — drag cutoff and resonance",
+      drumRack: "Filter curve — drag cutoff and resonance",
     }[kind] || "";
   }
 
@@ -1167,6 +1240,14 @@
       setParam("Filter_Resonance", clamp(lerp(1, 0, ty), 0, 1));
       return;
     }
+    const filter = FILTER_PARAMS[kind];
+    if (filter) {
+      if (filter.enable) setParam(filter.enable, true);
+      setParam(filter.freq, Math.round(clamp(freqAt(tx), 20, 18000)));
+      const resMax = filter.resMax || 1;
+      setParam(filter.res, clamp(lerp(resMax, 0, ty), 0, resMax));
+      return;
+    }
     if (kind === "autoPan") {
       setParam("Modulation_Frequency", clamp(lerp(0.05, 12, tx), 0.01, 20));
       setParam("Modulation_Amount", clamp(1 - ty, 0, 1));
@@ -1188,7 +1269,7 @@
     const drag = (event) => {
       const item = getItem();
       if (!item || item.parameters.Enabled === false) return;
-      if (!["channelEq", "delay", "compressor", "limiter", "phaser", "autoFilter", "autoPan", "autoShift", "erosion"].includes(item.kind)) return;
+      if (!["channelEq", "delay", "compressor", "limiter", "phaser", "autoFilter", "autoPan", "autoShift", "erosion", "drift", "wavetable", "melodicSampler", "drumRack"].includes(item.kind)) return;
       applyDrag(item.kind, item, pointer(canvas, event), setParam);
     };
     let dragging = false;
