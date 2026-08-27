@@ -1047,10 +1047,6 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
   margin: 0 -20px 8px;
   padding: 10px 20px 10px;
 }
-#kit .studio-title {
-  flex: none;
-}
-#kit .studio-title .kicker { margin-bottom: 1px; }
 #kit .studio-foot {
   margin: 8px -20px 0;
   padding: 8px 20px 4px;
@@ -1084,7 +1080,6 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
 
 @media (max-width: 900px) {
   #kit .studio-top { flex-wrap: wrap; }
-  #kit .studio-title { flex: 1 1 100%; }
   .kit-meta { grid-template-columns: 1fr 1fr; flex-basis: 100%; }
 }
 

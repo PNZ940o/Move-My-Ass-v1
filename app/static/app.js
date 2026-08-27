@@ -2830,7 +2830,6 @@ async function openKitFromFolder() {
       toast("No audio files in this folder", "error");
       return;
     }
-    $("kit-kicker").textContent = "Drum rack";
     $("kit-name").value = (plan.folder.split("/").pop() || "New") + " Kit";
     $("kit-slice-controls").hidden = true;
     kit.sample = null;
@@ -2890,7 +2889,6 @@ async function openKitFromSample() {
   kit.sample = path;
   kit.section = state.kind;
   kit.folder = "";
-  $("kit-kicker").textContent = "Slice";
   $("kit-name").value = path.split("/").pop().replace(/\.[^.]+$/, "") + " Slices";
   $("kit-slice-controls").hidden = false;
   $("kit-hint").textContent = "";
