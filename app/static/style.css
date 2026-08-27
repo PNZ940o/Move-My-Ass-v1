@@ -1131,8 +1131,9 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
 
 .kit-overview {
   position: relative;
+  flex: none;
   width: 100%;
-  margin: 0;
+  margin: 0 0 6px;
   background: rgba(0, 0, 0, .32);
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1250,6 +1251,26 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
   height: auto;
   background: rgba(0, 0, 0, .32);
   border-radius: 4px;
+  touch-action: none;
+}
+.pad.playable .wave-pad { cursor: pointer; }
+.pad-wave {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 24px;
+  display: flex;
+  flex-direction: column;
+}
+.pad-wave .wave-pad {
+  flex: 1 1 auto;
+  min-height: 24px;
+  cursor: pointer;
+}
+.pad-wave .wave-pad.panning { cursor: grabbing; }
+.pad-wave .slice-label {
+  left: 4px;
+  right: 4px;
+  bottom: 3px;
 }
 
 .pad-head {
@@ -1277,6 +1298,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
 }
 
 .pad select {
+  flex: none;
   width: 100%;
   margin: 0;
   padding: 4px 5px;

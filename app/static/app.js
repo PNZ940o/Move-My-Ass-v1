@@ -1986,7 +1986,7 @@ const kit = { mode: "pads", folder: "", section: "samples", available: [], pads:
 
 const KIT_PAD_KEYS = ["z", "x", "c", "v", "a", "s", "d", "f", "q", "w", "e", "r", "1", "2", "3", "4"];
 const KIT_KEY_INDEX = Object.fromEntries(KIT_PAD_KEYS.map((key, index) => [key, index]));
-const kitAudio = { buffers: new Map(), voices: [], selected: null, live: null, raf: 0 };
+const kitAudio = { buffers: new Map(), peaks: new Map(), voices: [], selected: null, live: null, raf: 0 };
 
 function kitSamplePath(name) {
   if (!name) return null;
@@ -2017,7 +2017,9 @@ async function kitAudioBuffer(path) {
   const data = await response.arrayBuffer();
   const buffer = await getAudioCtx().decodeAudioData(data.slice(0));
   kitAudio.buffers.set(url, buffer);
-  if (path === kit.sample) kit.hiPeaks = peaksFromBuffer(buffer, 2048);
+  const peaks = peaksFromBuffer(buffer, 2048);
+  kitAudio.peaks.set(url, peaks);
+  if (path === kit.sample) kit.hiPeaks = peaks;
   return buffer;
 }
 
@@ -2075,7 +2077,92 @@ function resetKitAudio() {
   stopKitPlayback();
   kitAudio.selected = null;
   kitAudio.buffers.clear();
+  kitAudio.peaks.clear();
   kit.hiPeaks = [];
+}
+
+function kitPeaksForPath(path) {
+  if (!path) return [];
+  return kitAudio.peaks.get(kitPreviewHref(path)) || [];
+}
+
+function kitPadPeaks(index) {
+  if (kit.mode === "slices") return kit.hiPeaks.length ? kit.hiPeaks : kit.peaks;
+  const spec = kitPadSource(index);
+  return spec ? kitPeaksForPath(spec.path) : [];
+}
+
+function kitPadView(index) {
+  const pad = kit.pads[index];
+  if (!pad) return { start: 0, end: 1 };
+  if (!pad.view) pad.view = { start: 0, end: 1 };
+  return pad.view;
+}
+
+function rememberPadView(index) {
+  if (kit.mode !== "pads" || index == null) return;
+  const pad = kit.pads[index];
+  if (!pad) return;
+  pad.view = { start: sliceView.start, end: sliceView.end };
+}
+
+function showPadView(index) {
+  const view = kit.pads[index]?.view;
+  sliceView.start = Number.isFinite(view?.start) ? view.start : 0;
+  sliceView.end = Number.isFinite(view?.end) ? view.end : 1;
+  if (sliceView.end - sliceView.start < MIN_SLICE_VIEW) {
+    sliceView.start = 0;
+    sliceView.end = 1;
+  }
+}
+
+function selectKitPad(index) {
+  const switched = kitAudio.selected !== index;
+  kitAudio.selected = index;
+  if (kit.mode === "pads" && switched) showPadView(index);
+  syncKitPadChrome();
+}
+
+function kitBufferForPath(path) {
+  if (!path) return null;
+  return kitAudio.buffers.get(kitPreviewHref(path)) || null;
+}
+
+function kitPadDurationLabel(index) {
+  const spec = kitPadSource(index);
+  const buffer = spec ? kitBufferForPath(spec.path) : null;
+  return buffer ? `${buffer.duration.toFixed(2)}s` : "";
+}
+
+async function loadKitPadWaveform(index) {
+  const spec = kitPadSource(index);
+  if (!spec) {
+    drawKitWaves();
+    return;
+  }
+  try {
+    await kitAudioBuffer(spec.path);
+    if (!$("kit").open) return;
+    const cell = [...$("padgrid").children].find((item) => Number(item.dataset.index) === index);
+    const label = cell?.querySelector(".slice-label");
+    if (label) label.textContent = kitPadDurationLabel(index);
+    drawKitWaves();
+  } catch {
+    /* sample couldn't be decoded — pad still plays if fetch works later */
+  }
+}
+
+async function loadKitPadWaveforms() {
+  const order = [];
+  if (kitAudio.selected != null) order.push(kitAudio.selected);
+  for (let index = 0; index < 16; index++) {
+    if (index !== kitAudio.selected) order.push(index);
+  }
+  for (const index of order) {
+    if (!$("kit").open) return;
+    if (!kitPadSource(index)) continue;
+    await loadKitPadWaveform(index);
+  }
 }
 
 function startKitVoice(index, buffer, startNorm, lengthNorm) {
@@ -2114,8 +2201,7 @@ function focusKitPads() {
 async function playKitPad(index) {
   const spec = kitPadSource(index);
   if (!spec) return;
-  kitAudio.selected = index;
-  syncKitPadChrome();
+  selectKitPad(index);
   drawKitWaves();
   focusKitPads();
   try {
@@ -2177,11 +2263,31 @@ function renderPads() {
         select.onchange = () => {
           mutateEditor("kit", () => {
             kit.pads[index].sample = select.value || null;
+            kit.pads[index].view = { start: 0, end: 1 };
+            if (kitAudio.selected === index) {
+              sliceView.start = 0;
+              sliceView.end = 1;
+            }
           });
           renderPads();
+          loadKitPadWaveform(index);
         };
         select.onpointerdown = (event) => event.stopPropagation();
-        cell.append(head, select);
+        select.onwheel = (event) => event.stopPropagation();
+        cell.append(head);
+        if (pad.sample) {
+          const wave = document.createElement("div");
+          wave.className = "pad-wave";
+          const canvas = document.createElement("canvas");
+          canvas.className = "wave-pad";
+          bindPadWaveNav(canvas, index);
+          const label = document.createElement("div");
+          label.className = "slice-label";
+          label.textContent = kitPadDurationLabel(index);
+          wave.append(canvas, label);
+          cell.append(wave);
+        }
+        cell.append(select);
         if (pad.sample) cell.classList.add("filled");
       } else {
         const slice = kit.slices[index];
@@ -2206,6 +2312,7 @@ function renderPads() {
         cell.classList.add("playable");
         cell.addEventListener("pointerdown", (event) => {
           if (event.button && event.button !== 0) return;
+          if (kit.mode === "pads" && (event.shiftKey || event.altKey || event.button === 1)) return;
           event.preventDefault();
           playKitPad(index);
         });
@@ -2217,23 +2324,79 @@ function renderPads() {
   requestAnimationFrame(drawKitWaves);
 }
 
+function bindPadWaveNav(canvas, index) {
+  canvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectKitPad(index);
+    const { norm } = overviewNorm(event, canvas);
+    if (event.shiftKey) panSliceView((event.deltaY || event.deltaX) * 0.001 * sliceViewSpan());
+    else zoomSliceView(event.deltaY > 0 ? 1.18 : 1 / 1.18, norm);
+  }, { passive: false });
+  canvas.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectKitPad(index);
+    const { norm } = overviewNorm(event, canvas);
+    if (sliceViewZoomed()) setSliceView(0, 1);
+    else zoomSliceView(0.25, norm);
+  });
+  canvas.addEventListener("pointerdown", (event) => {
+    if (!(event.shiftKey || event.altKey || event.button === 1)) return;
+    selectKitPad(index);
+    drawKitWaves();
+    if (!sliceViewZoomed()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    sliceEdit.panning = true;
+    sliceEdit.panX = event.clientX;
+    canvas.classList.add("panning");
+    try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!canvas.classList.contains("panning") || sliceEdit.boundary != null) return;
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const dx = (sliceEdit.panX - event.clientX) / Math.max(1, rect.width);
+    sliceEdit.panX = event.clientX;
+    panSliceView(dx * sliceViewSpan());
+  });
+  const endPan = (event) => {
+    if (!canvas.classList.contains("panning")) return;
+    sliceEdit.panning = false;
+    canvas.classList.remove("panning");
+    if (canvas.hasPointerCapture?.(event.pointerId)) {
+      try { canvas.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+    }
+  };
+  canvas.addEventListener("pointerup", endPan);
+  canvas.addEventListener("pointercancel", endPan);
+}
+
 function drawKitWaves() {
   const overview = $("kit-overview");
   if (!overview) return;
-  const show = kit.mode === "slices" && kit.peaks.length && !$("kit-slice-controls").hidden;
+  const selectedIndex = kitAudio.selected;
+  const peaks = kit.mode === "slices"
+    ? (kit.hiPeaks.length ? kit.hiPeaks : kit.peaks)
+    : kitPadPeaks(selectedIndex);
+  const show = peaks.length && (kit.mode === "slices"
+    ? !$("kit-slice-controls").hidden
+    : selectedIndex != null && kitPadSource(selectedIndex));
   overview.hidden = !show;
   if (show) {
     const canvas = overview.querySelector("canvas");
-    const selected = kit.slices[kitAudio.selected] || null;
+    const selected = kit.mode === "slices" ? (kit.slices[selectedIndex] || null) : null;
     const abs = kitAbsPlayhead();
-    drawWaveform(canvas, kit.hiPeaks.length ? kit.hiPeaks : kit.peaks, {
+    const liveMatches = kit.mode === "slices" || kitAudio.live === selectedIndex;
+    drawWaveform(canvas, peaks, {
       start: sliceView.start,
       end: sliceView.end,
-      slices: kit.slices,
-      activeBoundary: sliceEdit.boundary,
+      slices: kit.mode === "slices" ? kit.slices : undefined,
+      activeBoundary: kit.mode === "slices" ? sliceEdit.boundary : null,
       highlightStart: selected ? selected.start : undefined,
       highlightEnd: selected ? selected.start + selected.length : undefined,
-      absProgress: abs,
+      absProgress: liveMatches ? abs : undefined,
     });
     waveResize.observe(overview);
     updateSliceViewNav();
@@ -2241,11 +2404,16 @@ function drawKitWaves() {
   waveResize.observe($("padgrid"));
   for (const canvas of $("padgrid").querySelectorAll("canvas.wave-pad")) {
     const index = Number(canvas.closest(".pad")?.dataset.index);
-    drawWaveform(canvas, kit.hiPeaks.length ? kit.hiPeaks : kit.peaks, {
-      start: Number(canvas.dataset.start),
-      end: Number(canvas.dataset.end),
-      progress: kitPadLocalProgress(index),
-    });
+    const padPeaks = kitPadPeaks(index);
+    if (!padPeaks.length) continue;
+    const view = kit.mode === "slices"
+      ? { start: Number(canvas.dataset.start), end: Number(canvas.dataset.end) }
+      : (index === kitAudio.selected ? sliceView : kitPadView(index));
+    const voice = [...kitAudio.voices].reverse().find((item) => item.index === index);
+    const head = kitVoicePlayhead(voice);
+    drawWaveform(canvas, padPeaks, kit.mode === "slices"
+      ? { start: view.start, end: view.end, progress: head?.local }
+      : { start: view.start, end: view.end, absProgress: head?.abs });
   }
 }
 
@@ -2273,6 +2441,7 @@ function setSliceView(start, end) {
   }
   sliceView.start = lo;
   sliceView.end = hi;
+  rememberPadView(kitAudio.selected);
   drawKitWaves();
 }
 
@@ -2434,7 +2603,7 @@ function bindSliceEditor() {
   canvas.dataset.sliceBound = "1";
 
   canvas.addEventListener("pointerdown", (event) => {
-    if (kit.mode !== "slices" || $("kit-overview").hidden) return;
+    if ($("kit-overview").hidden) return;
     const { viewX, norm, width } = overviewNorm(event, canvas);
     const pan = event.shiftKey || event.button === 1 || event.altKey;
     if (pan && sliceViewZoomed()) {
@@ -2445,24 +2614,30 @@ function bindSliceEditor() {
       try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
       return;
     }
-    const boundary = nearestSliceBoundary(norm, width);
-    if (boundary != null) {
+    if (kit.mode === "slices") {
+      const boundary = nearestSliceBoundary(norm, width);
+      if (boundary != null) {
+        event.preventDefault();
+        event.stopPropagation();
+        sliceEdit.boundary = boundary;
+        canvas.classList.add("dragging");
+        try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
+        setSliceBoundary(boundary, norm);
+        applySliceVisuals();
+        return;
+      }
+      const index = sliceIndexAt(norm);
+      if (index == null) return;
       event.preventDefault();
-      event.stopPropagation();
-      sliceEdit.boundary = boundary;
-      canvas.classList.add("dragging");
-      try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
-      setSliceBoundary(boundary, norm);
-      applySliceVisuals();
+      playKitPad(index);
       return;
     }
-    const index = sliceIndexAt(norm);
-    if (index == null) return;
+    if (kitAudio.selected == null) return;
     event.preventDefault();
-    playKitPad(index);
+    playKitPad(kitAudio.selected);
   });
   canvas.addEventListener("pointermove", (event) => {
-    if (kit.mode !== "slices" || $("kit-overview").hidden) return;
+    if ($("kit-overview").hidden) return;
     const { viewX, norm, width } = overviewNorm(event, canvas);
     if (sliceEdit.panning) {
       event.preventDefault();
@@ -2471,7 +2646,7 @@ function bindSliceEditor() {
       panSliceView(dx * sliceViewSpan());
       return;
     }
-    if (sliceEdit.boundary != null) {
+    if (kit.mode === "slices" && sliceEdit.boundary != null) {
       event.preventDefault();
       let next = norm;
       if (viewX < 0.06) panSliceView(-sliceViewSpan() * 0.03);
@@ -2482,7 +2657,7 @@ function bindSliceEditor() {
       applySliceVisuals();
       return;
     }
-    const onHandle = nearestSliceBoundary(norm, width) != null;
+    const onHandle = kit.mode === "slices" && nearestSliceBoundary(norm, width) != null;
     canvas.style.cursor = onHandle ? "ew-resize" : event.shiftKey && sliceViewZoomed() ? "grab" : "pointer";
   });
   const endDrag = (event) => {
@@ -2499,7 +2674,7 @@ function bindSliceEditor() {
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
   canvas.addEventListener("wheel", (event) => {
-    if (kit.mode !== "slices" || $("kit-overview").hidden) return;
+    if ($("kit-overview").hidden) return;
     event.preventDefault();
     const { norm } = overviewNorm(event, canvas);
     if (event.shiftKey) {
@@ -2509,14 +2684,16 @@ function bindSliceEditor() {
     zoomSliceView(event.deltaY > 0 ? 1.18 : 1 / 1.18, norm);
   }, { passive: false });
   canvas.addEventListener("dblclick", (event) => {
-    if (kit.mode !== "slices" || $("kit-overview").hidden) return;
+    if ($("kit-overview").hidden) return;
     event.preventDefault();
     const { norm } = overviewNorm(event, canvas);
     if (sliceViewZoomed()) setSliceView(0, 1);
-    else {
+    else if (kit.mode === "slices") {
       const index = sliceIndexAt(norm);
       if (index != null) zoomSliceViewToIndex(index);
       else zoomSliceView(0.25, norm);
+    } else {
+      zoomSliceView(0.25, norm);
     }
   });
 
@@ -2647,7 +2824,7 @@ async function openKitFromFolder() {
     kit.section = state.kind;
     kit.folder = plan.folder;
     kit.available = plan.available;
-    kit.pads = plan.pads;
+    kit.pads = plan.pads.map((pad) => ({ ...pad, view: { start: 0, end: 1 } }));
 
     if (!plan.available.length) {
       toast("No audio files in this folder", "error");
@@ -2657,19 +2834,25 @@ async function openKitFromFolder() {
     $("kit-title").textContent = `Build kit from ${plan.folder || plan.section}`;
     $("kit-name").value = (plan.folder.split("/").pop() || "New") + " Kit";
     $("kit-slice-controls").hidden = true;
-    $("kit-overview").hidden = true;
+    kit.sample = null;
     kit.peaks = [];
     resetKitAudio();
+    resetSliceView();
+    const first = plan.pads.findIndex((pad) => pad.sample);
+    if (first >= 0) kitAudio.selected = first;
     await fillKitFxSelects();
     const placed = plan.pads.filter((p) => p.sample).length;
     $("kit-hint").textContent =
       `${placed} of 16 pads filled from ${plan.available.length} samples` +
       (plan.unplaced.length ? ` · ${plan.unplaced.length} didn't fit` : "") +
-      " · Z X C V A S D F Q W E R 1 2 3 4 to play";
+      " · click a pad to play, scroll the wave to zoom, Shift-drag to pan · Z X C V A S D F Q W E R 1 2 3 4";
     renderPads();
     $("kit").showModal();
     beginEditor("kit");
+    bindSliceEditor();
     focusKitPads();
+    requestAnimationFrame(() => requestAnimationFrame(drawKitWaves));
+    loadKitPadWaveforms();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -2868,7 +3051,11 @@ const editorUndo = {
 
 function snapshotKit() {
   return {
-    pads: (kit.pads || []).map((pad) => ({ sample: pad.sample || null, role: pad.role || "" })),
+    pads: (kit.pads || []).map((pad) => ({
+      sample: pad.sample || null,
+      role: pad.role || "",
+      view: pad.view ? { start: pad.view.start, end: pad.view.end } : null,
+    })),
     slices: (kit.slices || []).map((slice) => ({
       start: slice.start,
       length: slice.length,
@@ -2885,7 +3072,11 @@ function snapshotKit() {
 }
 
 function applyKitSnapshot(data) {
-  kit.pads = (data.pads || []).map((pad) => ({ sample: pad.sample || null, role: pad.role || "" }));
+  kit.pads = (data.pads || []).map((pad) => ({
+    sample: pad.sample || null,
+    role: pad.role || "",
+    view: pad.view ? { start: pad.view.start, end: pad.view.end } : { start: 0, end: 1 },
+  }));
   kit.slices = (data.slices || []).map((slice) => ({ ...slice }));
   if ($("kit-name")) $("kit-name").value = data.name || "";
   if ($("kit-type") && data.type) $("kit-type").value = data.type;
@@ -2896,8 +3087,10 @@ function applyKitSnapshot(data) {
     if ($("slice-count-label")) $("slice-count-label").textContent = data.sliceCount;
   }
   kitAudio.selected = data.selected;
+  if (kit.mode === "pads") showPadView(kitAudio.selected);
   syncSliceSeconds();
   renderPads();
+  if (kit.mode === "pads") loadKitPadWaveforms();
 }
 
 function instrumentCacheKey(item) {
