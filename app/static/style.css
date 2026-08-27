@@ -286,6 +286,18 @@ button.ghost:hover:not(:disabled) {
   border-color: transparent;
   color: var(--text);
 }
+button.dismiss {
+  background: var(--pink);
+  border-color: var(--pink);
+  color: var(--ink);
+  font-weight: 600;
+  border-radius: var(--pill);
+  padding: 6px 14px;
+}
+button.dismiss:hover:not(:disabled) {
+  background: #ff70f8;
+  border-color: #ff70f8;
+}
 
 /* ---------- studio chrome (shared with Make effect) ---------- */
 
@@ -1445,6 +1457,7 @@ button.drop-item:disabled {
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
+  touch-action: none;
 }
 .kit-overview[hidden] { display: none; }
 .kit-zoom {

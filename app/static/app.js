@@ -2564,14 +2564,96 @@ function renderPads() {
   requestAnimationFrame(drawKitWaves);
 }
 
-function bindPadWaveNav(canvas, index) {
-  canvas.addEventListener("wheel", (event) => {
+function bindWaveTwoFinger(canvas) {
+  if (canvas.dataset.twoFingerBound) return;
+  canvas.dataset.twoFingerBound = "1";
+  const pointers = new Map();
+  const gesture = { active: false, lastX: 0, lastY: 0, center: 0 };
+
+  function centroid() {
+    let x = 0;
+    let y = 0;
+    for (const point of pointers.values()) {
+      x += point.x;
+      y += point.y;
+    }
+    const n = Math.max(1, pointers.size);
+    return { x: x / n, y: y / n };
+  }
+
+  function endTwoFinger() {
+    if (!gesture.active) return;
+    gesture.active = false;
+    sliceEdit.twoFinger = false;
+    canvas.classList.remove("panning");
+  }
+
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse") return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    try { canvas.setPointerCapture(event.pointerId); } catch { /* already captured */ }
+    if (pointers.size < 2) return;
     event.preventDefault();
     event.stopPropagation();
+    event.stopImmediatePropagation();
+    sliceEdit.twoFinger = true;
+    sliceEdit.boundary = null;
+    sliceEdit.panning = false;
+    canvas.classList.remove("dragging");
+    canvas.classList.add("panning");
+    const mid = centroid();
+    gesture.active = true;
+    gesture.lastX = mid.x;
+    gesture.lastY = mid.y;
+    gesture.center = overviewNorm({ clientX: mid.x, clientY: mid.y }, canvas).norm;
+    for (const id of pointers.keys()) {
+      try { canvas.setPointerCapture(id); } catch { /* already captured */ }
+    }
+  }, true);
+
+  canvas.addEventListener("pointermove", (event) => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (!gesture.active || pointers.size < 2) return;
+    event.preventDefault();
+    const mid = centroid();
+    const dx = mid.x - gesture.lastX;
+    const dy = mid.y - gesture.lastY;
+    gesture.lastX = mid.x;
+    gesture.lastY = mid.y;
+    const width = Math.max(1, canvas.getBoundingClientRect().width);
+    if (dx) panSliceView((dx / width) * sliceViewSpan());
+    if (dy) zoomSliceView(Math.exp(dy * 0.012), gesture.center);
+  });
+
+  const release = (event) => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.delete(event.pointerId);
+    if (canvas.hasPointerCapture?.(event.pointerId)) {
+      try { canvas.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+    }
+    if (pointers.size < 2) endTwoFinger();
+  };
+  canvas.addEventListener("pointerup", release);
+  canvas.addEventListener("pointercancel", release);
+}
+
+function handleWaveWheel(event, canvas) {
+  event.preventDefault();
+  const { norm } = overviewNorm(event, canvas);
+  if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+    panSliceView((event.deltaX || event.deltaY) * 0.001 * sliceViewSpan());
+    return;
+  }
+  zoomSliceView(event.deltaY > 0 ? 1.18 : 1 / 1.18, norm);
+}
+
+function bindPadWaveNav(canvas, index) {
+  bindWaveTwoFinger(canvas);
+  canvas.addEventListener("wheel", (event) => {
+    event.stopPropagation();
     selectKitPad(index);
-    const { norm } = overviewNorm(event, canvas);
-    if (event.shiftKey) panSliceView((event.deltaY || event.deltaX) * 0.001 * sliceViewSpan());
-    else zoomSliceView(event.deltaY > 0 ? 1.18 : 1 / 1.18, norm);
+    handleWaveWheel(event, canvas);
   }, { passive: false });
   canvas.addEventListener("dblclick", (event) => {
     event.preventDefault();
@@ -2582,6 +2664,7 @@ function bindPadWaveNav(canvas, index) {
     else zoomSliceView(0.25, norm);
   });
   canvas.addEventListener("pointerdown", (event) => {
+    if (sliceEdit.twoFinger) return;
     if (!(event.shiftKey || event.altKey || event.button === 1)) return;
     selectKitPad(index);
     drawKitWaves();
@@ -2594,7 +2677,7 @@ function bindPadWaveNav(canvas, index) {
     try { canvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
   });
   canvas.addEventListener("pointermove", (event) => {
-    if (!canvas.classList.contains("panning") || sliceEdit.boundary != null) return;
+    if (sliceEdit.twoFinger || !sliceEdit.panning || sliceEdit.boundary != null) return;
     event.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const dx = (sliceEdit.panX - event.clientX) / Math.max(1, rect.width);
@@ -2602,7 +2685,7 @@ function bindPadWaveNav(canvas, index) {
     panSliceView(dx * sliceViewSpan());
   });
   const endPan = (event) => {
-    if (!canvas.classList.contains("panning")) return;
+    if (sliceEdit.twoFinger || !sliceEdit.panning) return;
     sliceEdit.panning = false;
     canvas.classList.remove("panning");
     if (canvas.hasPointerCapture?.(event.pointerId)) {
@@ -2660,7 +2743,7 @@ function drawKitWaves() {
 const MIN_SLICE = 0.004;
 const MIN_SLICE_VIEW = 0.02;
 const sliceView = { start: 0, end: 1 };
-const sliceEdit = { boundary: null, panning: false, panX: 0 };
+const sliceEdit = { boundary: null, panning: false, panX: 0, twoFinger: false };
 
 function sliceViewSpan() {
   return Math.max(MIN_SLICE_VIEW, sliceView.end - sliceView.start);
@@ -2842,8 +2925,10 @@ function bindSliceEditor() {
   if (!canvas || canvas.dataset.sliceBound) return;
   canvas.dataset.sliceBound = "1";
 
+  bindWaveTwoFinger(canvas);
+
   canvas.addEventListener("pointerdown", (event) => {
-    if ($("kit-overview").hidden) return;
+    if ($("kit-overview").hidden || sliceEdit.twoFinger) return;
     const { viewX, norm, width } = overviewNorm(event, canvas);
     const pan = event.shiftKey || event.button === 1 || event.altKey;
     if (pan && sliceViewZoomed()) {
@@ -2877,7 +2962,7 @@ function bindSliceEditor() {
     playKitPad(kitAudio.selected);
   });
   canvas.addEventListener("pointermove", (event) => {
-    if ($("kit-overview").hidden) return;
+    if ($("kit-overview").hidden || sliceEdit.twoFinger) return;
     const { viewX, norm, width } = overviewNorm(event, canvas);
     if (sliceEdit.panning) {
       event.preventDefault();
@@ -2901,6 +2986,7 @@ function bindSliceEditor() {
     canvas.style.cursor = onHandle ? "ew-resize" : event.shiftKey && sliceViewZoomed() ? "grab" : "pointer";
   });
   const endDrag = (event) => {
+    if (sliceEdit.twoFinger) return;
     if (sliceEdit.boundary == null && !sliceEdit.panning) return;
     sliceEdit.boundary = null;
     sliceEdit.panning = false;
@@ -2915,13 +3001,7 @@ function bindSliceEditor() {
   canvas.addEventListener("pointercancel", endDrag);
   canvas.addEventListener("wheel", (event) => {
     if ($("kit-overview").hidden) return;
-    event.preventDefault();
-    const { norm } = overviewNorm(event, canvas);
-    if (event.shiftKey) {
-      panSliceView((event.deltaY || event.deltaX) * 0.001 * sliceViewSpan());
-      return;
-    }
-    zoomSliceView(event.deltaY > 0 ? 1.18 : 1 / 1.18, norm);
+    handleWaveWheel(event, canvas);
   }, { passive: false });
   canvas.addEventListener("dblclick", (event) => {
     if ($("kit-overview").hidden) return;

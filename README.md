@@ -1,8 +1,13 @@
-# Move My Ass
+# Move My Ass — v1
 
 A replacement for Ableton's Move Manager, focused on the things the official one
 handles badly: bulk sample uploads, building drum kits, browsing what's actually
 on the device, preset management, and backups.
+
+**This is v1** (shippable): one instrument plus two Move effect slots, no
+instrument/effect editors. Open it at **http://movemyass.local:8000**. The beta
+fork with those editors is `D:\Programming\Move Manager` at
+**http://movemyass.beta:8001**.
 
 It runs as a small web app **on your PC** and talks to the Move over SFTP. Nothing
 is installed on the device and no firmware is modified — we only read and write
@@ -10,7 +15,7 @@ files in your own user library.
 
 ## Where copies live
 
-- **Working copy:** `D:\Programming\Move Manager` (the folder Cursor uses)
+- **Working copy:** `D:\Programming\Move Manager v1` (this folder)
 - **Desktop copy:** `%USERPROFILE%\Desktop\Move My Ass` — source only, no `.venv`
   and no mock device files. To run it from the Desktop:
 
@@ -175,10 +180,10 @@ resample and audio recording there.
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe scripts\make_mock.py
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Then open http://127.0.0.1:8000. It starts against the mock folder, so it works
+Then open http://movemyass.local:8000 (`run.ps1` maps that name to this PC). It starts against the mock folder, so it works
 before you have SSH set up.
 
 ## Connecting to a real Move
