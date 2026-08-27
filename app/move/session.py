@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
 from dataclasses import replace
 from pathlib import Path
 
-from ..config import Settings, settings
+from ..config import PROJECT_ROOT, Settings, settings
 from .backend import LocalBackend, MoveBackend, SftpBackend
 from .undo import UndoStack
 
@@ -29,8 +31,20 @@ class MoveSession:
                 self._backend = self._connect()
             return self._backend
 
+    def _ensure_mock(self) -> None:
+        drums = self.config.mock_root / "data" / "UserData" / "UserLibrary" / "Samples" / "Drums"
+        if drums.is_dir() and any(drums.iterdir()):
+            return
+        script = PROJECT_ROOT / "scripts" / "make_mock.py"
+        subprocess.run([sys.executable, str(script)], check=True, cwd=PROJECT_ROOT)
+
     def _connect(self) -> MoveBackend:
         if self.config.backend != "sftp":
+            try:
+                self._ensure_mock()
+            except Exception as exc:
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                raise MoveConnectionError(self._last_error) from exc
             self._last_error = None
             return LocalBackend(self.config.mock_root)
         try:
