@@ -875,6 +875,31 @@ def read_device(backend, source: str, relative: str) -> dict:
     return device
 
 
+def _kind_from_payload(payload: dict) -> str:
+    kind = (payload or {}).get("kind") or ""
+    if kind in BY_KIND:
+        return kind
+    try:
+        device = _unwrap_effect(payload)
+    except Exception:
+        return ""
+    kind = device.get("kind") or ""
+    return kind if kind in BY_KIND else ""
+
+
+def _factory_effects_folder(backend) -> str:
+    try:
+        direct = paths.resolve("factory", FACTORY_EFFECTS)
+        if backend.exists(direct) and backend.is_dir(direct):
+            return FACTORY_EFFECTS
+        for entry in backend.list_dir(paths.resolve("factory", "")):
+            if entry.is_dir and entry.name.replace("-", " ").lower() == "audio effects":
+                return entry.name
+    except OSError:
+        pass
+    return FACTORY_EFFECTS
+
+
 def _walk_presets(backend, kind: str, root: str, source: str, found: list[dict], limit: int) -> None:
     def walk(relative: str) -> None:
         if len(found) >= limit:
@@ -896,10 +921,18 @@ def _walk_presets(backend, kind: str, root: str, source: str, found: list[dict],
                 continue
             stem = posixpath.splitext(rel)[0]
             if kind == "factory":
-                label_path = stem[len(FACTORY_EFFECTS) + 1 :] if stem.startswith(FACTORY_EFFECTS + "/") else stem
+                parts = stem.replace("\\", "/").split("/")
+                label_path = "/".join(parts[1:]) if len(parts) > 1 else stem
             else:
                 label_path = stem
             fx_kind = _kind_from_path(rel)
+            if not fx_kind:
+                try:
+                    payload = json.loads(backend.read_file(entry.path).decode("utf-8"))
+                    if isinstance(payload, dict):
+                        fx_kind = _kind_from_payload(payload)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    pass
             found.append({
                 "source": source,
                 "path": rel,
@@ -916,7 +949,7 @@ def list_presets(backend, limit: int = 400) -> list[dict]:
     """User Audio Effects first, then Core Library Audio Effects."""
     found: list[dict] = []
     _walk_presets(backend, "effects", "", "effects", found, limit)
-    factory_root = paths.resolve("factory", FACTORY_EFFECTS)
-    if backend.exists(factory_root) and backend.is_dir(factory_root):
-        _walk_presets(backend, "factory", FACTORY_EFFECTS, "factory", found, limit)
+    factory: list[dict] = []
+    _walk_presets(backend, "factory", _factory_effects_folder(backend), "factory", factory, limit)
+    found.extend(factory)
     return found

@@ -87,6 +87,25 @@ def main() -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(preset, indent=2), encoding="utf-8")
 
+    from app.move import effects
+
+    def write_fx(path: Path, kind: str, name: str, rack: bool = False) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if rack:
+            payload = effects.build_preset(name, [{"kind": kind}])
+        else:
+            device = effects.build_device(kind)
+            device["name"] = name
+            payload = {"$schema": effects.SCHEMA, **device}
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    write_fx(local(f"{paths.CORE_LIBRARY}/Audio Effects/Reverb/Hall Bright.json"), "reverb", "Hall Bright")
+    write_fx(local(f"{paths.CORE_LIBRARY}/Audio Effects/Reverb/Arena Tail.json"), "reverb", "Arena Tail")
+    write_fx(local(f"{paths.CORE_LIBRARY}/Audio Effects/Saturator/808 Shaper.json"), "saturator", "808 Shaper")
+    write_fx(local(f"{paths.CORE_LIBRARY}/Audio Effects/Delay/16th Clean.json"), "delay", "16th Clean")
+    write_fx(local(f"{paths.AUDIO_EFFECTS}/Reverb/My Hall.ablpreset"), "reverb", "My Hall", rack=True)
+    write_fx(local(f"{paths.AUDIO_EFFECTS}/Saturator/Warm Clip.ablpreset"), "saturator", "Warm Clip", rack=True)
+
     print(f"Mock Move built at {settings.mock_root}")
 
 

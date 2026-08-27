@@ -3012,6 +3012,18 @@ function kitFxName(kind) {
   return (kitFxSpecs().find((item) => item.kind === kind) || {}).name || kind;
 }
 
+function kitFxPresetMatches(item, kind) {
+  if (!kind || !item) return false;
+  const needle = String(kind).toLowerCase();
+  const name = kitFxName(kind).toLowerCase().replace(/-/g, " ");
+  if (String(item.kind || "").toLowerCase() === needle) return true;
+  const group = String(item.group || "").toLowerCase().replace(/-/g, " ");
+  if (group === name || group.replace(/\s+/g, "") === needle) return true;
+  const parts = String(item.path || "").replace(/\\/g, "/").toLowerCase().split("/").filter(Boolean);
+  const folder = parts.length >= 2 ? parts[parts.length - 2].replace(/-/g, " ") : "";
+  return folder === needle || folder === name || folder.replace(/\s+/g, "") === needle;
+}
+
 function kitFxPresetValue(item) {
   if (item.source === "factory") return "factory:" + item.path;
   return "preset:" + item.path;
@@ -3072,7 +3084,7 @@ function populateKitFxPresetSelect(select, kind, selected) {
   }
   select.disabled = false;
   select.append(kitFxOption(kind, `Default (${kitFxName(kind)})`, selected === kind || !selected));
-  const matching = (kit.fxPresets || []).filter((item) => item.kind === kind);
+  const matching = (kit.fxPresets || []).filter((item) => kitFxPresetMatches(item, kind));
   function appendGroup(label, items) {
     if (!items.length) return;
     const group = document.createElement("optgroup");
@@ -3108,8 +3120,9 @@ async function fillKitFxSelects() {
   try {
     const data = await api("/api/effects/presets");
     kit.fxPresets = data.presets || [];
-  } catch {
+  } catch (error) {
     kit.fxPresets = [];
+    toast(error.message || "Could not load effect presets", "error");
   }
   applyKitFxSlot("return", "reverb");
   applyKitFxSlot("insert", "saturator");
