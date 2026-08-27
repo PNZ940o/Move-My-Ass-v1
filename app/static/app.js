@@ -2831,7 +2831,6 @@ async function openKitFromFolder() {
       return;
     }
     $("kit-kicker").textContent = "Drum rack";
-    $("kit-title").textContent = `Build kit from ${plan.folder || plan.section}`;
     $("kit-name").value = (plan.folder.split("/").pop() || "New") + " Kit";
     $("kit-slice-controls").hidden = true;
     kit.sample = null;
@@ -2841,11 +2840,7 @@ async function openKitFromFolder() {
     const first = plan.pads.findIndex((pad) => pad.sample);
     if (first >= 0) kitAudio.selected = first;
     await fillKitFxSelects();
-    const placed = plan.pads.filter((p) => p.sample).length;
-    $("kit-hint").textContent =
-      `${placed} of 16 pads filled from ${plan.available.length} samples` +
-      (plan.unplaced.length ? ` · ${plan.unplaced.length} didn't fit` : "") +
-      " · click a pad to play, scroll the wave to zoom, Shift-drag to pan · Z X C V A S D F Q W E R 1 2 3 4";
+    $("kit-hint").textContent = "";
     renderPads();
     $("kit").showModal();
     beginEditor("kit");
@@ -2896,11 +2891,9 @@ async function openKitFromSample() {
   kit.section = state.kind;
   kit.folder = "";
   $("kit-kicker").textContent = "Slice";
-  $("kit-title").textContent = `Slice ${path.split("/").pop()}`;
   $("kit-name").value = path.split("/").pop().replace(/\.[^.]+$/, "") + " Slices";
   $("kit-slice-controls").hidden = false;
-  $("kit-hint").textContent =
-    "Scroll the wave to zoom, Shift-drag to pan, drag magenta handles to set start and end. Play with Z X C V · A S D F · Q W E R · 1 2 3 4.";
+  $("kit-hint").textContent = "";
   resetKitAudio();
   resetSliceView();
   await fillKitFxSelects();
