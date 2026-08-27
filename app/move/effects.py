@@ -19,6 +19,10 @@ LOCK_SEAL = -100211998
 MAX_DEVICES = 8
 
 
+FACTORY_EFFECTS = "Audio Effects"
+PRESET_SUFFIXES = {".ablpreset", ".json"}
+
+
 class EffectError(ValueError):
     pass
 
@@ -754,15 +758,129 @@ def parse_preset(data: bytes) -> dict:
     }
 
 
-def list_presets(backend, limit: int = 400) -> list[dict]:
-    """Saved Audio Effects presets, nested folders included."""
-    found: list[dict] = []
+def _kind_from_folder(folder: str) -> str:
+    key = folder.strip().lower().replace("-", " ")
+    compact = key.replace(" ", "")
+    for item in CATALOG:
+        names = {
+            item["kind"].lower(),
+            item["name"].lower().replace("-", " "),
+            item["kind"].lower().replace(" ", ""),
+            item["name"].lower().replace(" ", "").replace("-", ""),
+        }
+        if key in names or compact in names:
+            return item["kind"]
+    return ""
 
-    def walk(relative: str = "") -> None:
+
+def _kind_from_text(text: str) -> str:
+    kind = _kind_from_folder(text)
+    if kind:
+        return kind
+    compact = text.lower().replace("-", "").replace("_", "").replace(" ", "")
+    for item in sorted(CATALOG, key=lambda entry: -len(entry["name"])):
+        tokens = (
+            item["kind"].lower().replace(" ", ""),
+            item["name"].lower().replace("-", "").replace(" ", ""),
+        )
+        for token in tokens:
+            if len(token) >= 3 and token in compact:
+                return item["kind"]
+    return ""
+
+
+def _kind_from_path(relative: str) -> str:
+    stem = posixpath.splitext(relative.replace("\\", "/"))[0]
+    parts = [part for part in stem.split("/") if part]
+    if parts and parts[0] == FACTORY_EFFECTS:
+        parts = parts[1:]
+    folder = parts[0] if len(parts) > 1 else ""
+    return _kind_from_text(folder) if folder else _kind_from_text(posixpath.basename(stem))
+
+
+def _unwrap_effect(payload: dict) -> dict:
+    device = {key: value for key, value in payload.items() if key != "$schema"}
+    if device.get("kind") != "audioEffectRack":
+        return device
+    chains = device.get("chains") or []
+    inner = list((chains[0].get("devices") or []) if chains else [])
+    if len(inner) == 1 and inner[0].get("kind"):
+        return inner[0]
+    return device
+
+
+def devices_from_upload(payload: dict) -> list[dict]:
+    """Turn an uploaded effect file into one or two slot devices."""
+    if not isinstance(payload, dict) or not payload.get("kind"):
+        raise EffectError("this file is not a Move effect")
+    kind = payload.get("kind")
+    if kind == "instrumentRack":
+        raise EffectError("that file is an instrument — use Upload instrument")
+
+    def clean(device: dict) -> dict:
+        copy = json.loads(json.dumps(_unwrap_effect(device)))
+        copy["presetUri"] = None
+        fx_kind = copy.get("kind")
+        if fx_kind not in BY_KIND:
+            raise EffectError("this preset is not an audio effect")
+        if not copy.get("name"):
+            copy["name"] = BY_KIND[fx_kind]["name"]
+        return copy
+
+    if kind in BY_KIND:
+        return [clean(payload)]
+    if kind != "audioEffectRack":
+        raise EffectError("this preset is not an audio effect")
+    found: list[dict] = []
+    for chain in payload.get("chains") or []:
+        for device in chain.get("devices") or []:
+            device_kind = (device or {}).get("kind")
+            if device_kind in BY_KIND:
+                found.append(clean(device))
+            if len(found) >= 2:
+                return found
+    if not found:
+        raise EffectError("this rack has no effects")
+    return found
+
+
+def read_device(backend, source: str, relative: str) -> dict:
+    """Load a user or Core Library effect as a slot device."""
+    source = (source or "effects").strip().lower()
+    relative = (relative or "").replace("\\", "/").strip("/")
+    if not relative or ".." in relative.split("/"):
+        raise EffectError("invalid effect preset")
+    if source == "factory":
+        if relative != FACTORY_EFFECTS and not relative.startswith(FACTORY_EFFECTS + "/"):
+            raise EffectError("core effects live in Audio Effects")
+        absolute = paths.resolve("factory", relative)
+    else:
+        absolute = paths.resolve("effects", relative)
+    if not backend.exists(absolute) or backend.is_dir(absolute):
+        raise EffectError("effect preset not found")
+    try:
+        payload = json.loads(backend.read_file(absolute).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EffectError("effect preset is not readable") from exc
+    if not isinstance(payload, dict) or not payload.get("kind"):
+        raise EffectError("this file is not a Move effect")
+    device = _unwrap_effect(payload)
+    if source != "factory":
+        from . import kits
+        device["presetUri"] = kits.effect_uri(relative)
+    else:
+        device["presetUri"] = None
+    if not device.get("name"):
+        device["name"] = posixpath.splitext(posixpath.basename(relative))[0]
+    return device
+
+
+def _walk_presets(backend, kind: str, root: str, source: str, found: list[dict], limit: int) -> None:
+    def walk(relative: str) -> None:
         if len(found) >= limit:
             return
         try:
-            entries = backend.list_dir(paths.resolve("effects", relative))
+            entries = backend.list_dir(paths.resolve(kind, relative))
         except OSError:
             return
         for entry in sorted(entries, key=lambda item: item.name.lower()):
@@ -770,18 +888,35 @@ def list_presets(backend, limit: int = 400) -> list[dict]:
                 return
             if entry.name.startswith("."):
                 continue
-            rel = paths.relative_to("effects", entry.path)
+            rel = paths.relative_to(kind, entry.path)
             if entry.is_dir:
                 walk(rel)
                 continue
-            if posixpath.splitext(entry.name)[1].lower() != ".ablpreset":
+            if posixpath.splitext(entry.name)[1].lower() not in PRESET_SUFFIXES:
                 continue
             stem = posixpath.splitext(rel)[0]
+            if kind == "factory":
+                label_path = stem[len(FACTORY_EFFECTS) + 1 :] if stem.startswith(FACTORY_EFFECTS + "/") else stem
+            else:
+                label_path = stem
+            fx_kind = _kind_from_path(rel)
             found.append({
+                "source": source,
                 "path": rel,
                 "name": posixpath.basename(stem),
-                "label": stem.replace("/", " / "),
+                "label": label_path.replace("/", " / ") or posixpath.basename(stem),
+                "kind": fx_kind,
+                "group": BY_KIND[fx_kind]["name"] if fx_kind in BY_KIND else (label_path.split("/")[0] if "/" in label_path else "Other"),
             })
 
-    walk()
+    walk(root)
+
+
+def list_presets(backend, limit: int = 400) -> list[dict]:
+    """User Audio Effects first, then Core Library Audio Effects."""
+    found: list[dict] = []
+    _walk_presets(backend, "effects", "", "effects", found, limit)
+    factory_root = paths.resolve("factory", FACTORY_EFFECTS)
+    if backend.exists(factory_root) and backend.is_dir(factory_root):
+        _walk_presets(backend, "factory", FACTORY_EFFECTS, "factory", found, limit)
     return found

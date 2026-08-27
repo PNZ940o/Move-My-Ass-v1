@@ -14,13 +14,13 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from .config import PROJECT_ROOT
-from .move import effects, instruments, kits, library, paths, presets, sets, storage, undo
+from .move import effects, kits, library, paths, presets, sets, storage, undo
 from .move.backend import MoveBackend
 from .move.pad_colors import PAD_COLORS, hex_color
 from .move.paths import UnsafePath
 from .move.session import MoveConnectionError, session
 
-app = FastAPI(title="Move My Ass")
+app = FastAPI(title="Move My Ass v1")
 app.mount("/static", StaticFiles(directory=PROJECT_ROOT / "app" / "static"), name="static")
 templates = Jinja2Templates(directory=PROJECT_ROOT / "app" / "templates")
 
@@ -124,6 +124,7 @@ async def upload(
         relative = relative.replace("\\", "/").lstrip("/")
         mark = builder.checkpoint()
         try:
+            sets.guard_write(kind, posixpath.join(dest_folder, relative))
             target = paths.resolve(kind, posixpath.join(dest_folder, relative))
             builder.will_overwrite(target)
             backend.write_file(target, await upload_file.read())
@@ -146,6 +147,10 @@ class PathRequest(BaseModel):
 @app.post("/api/mkdir")
 async def mkdir(body: PathRequest):
     require_writable(body.kind)
+    try:
+        sets.guard_write(body.kind, body.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     target = paths.resolve(body.kind, body.path)
     if target == paths.LIBRARY_ROOTS[body.kind]:
         raise HTTPException(status_code=400, detail="give the folder a name")
@@ -307,10 +312,61 @@ async def copy_set(body: CopySetRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=507, detail=str(exc)) from exc
     builder = undo.Builder(backend, f"Copy {copied.get('name') or 'set'}")
     builder.created(posixpath.join(paths.SETS, copied["path"]))
     commit_undo(builder)
     return {"ok": True, **copied}
+
+
+@app.post("/api/import-set")
+async def import_set(
+    files: list[UploadFile] = File(...),
+    relpaths: list[str] = Form(default=[]),
+    pad: int | None = Form(None),
+    off_grid: bool = Form(False),
+):
+    """Install a PC-saved .ablbundle / .zip / .abl / Song.abl folder as a real set."""
+    backend = get_backend()
+    uploads: list[tuple[str, bytes]] = []
+    try:
+        for index, upload_file in enumerate(files):
+            name = upload_file.filename or f"upload-{index}"
+            relative = relpaths[index] if index < len(relpaths) and relpaths[index] else name
+            uploads.append((relative.replace("\\", "/").lstrip("/"), await upload_file.read()))
+    finally:
+        for upload_file in files:
+            await upload_file.close()
+
+    try:
+        imported = await run_in_threadpool(
+            lambda: sets.import_uploads(
+                backend, uploads, pad_number=pad, off_grid=off_grid
+            )
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=507, detail=str(exc)) from exc
+
+    if imported:
+        label = (
+            f"Import {imported[0].get('name') or 'set'}"
+            if len(imported) == 1
+            else f"Import {len(imported)} sets"
+        )
+        builder = undo.Builder(backend, label)
+        for item in imported:
+            builder.created(posixpath.join(paths.SETS, item["path"]))
+        commit_undo(builder)
+    return {"ok": True, "imported": imported, "count": len(imported)}
 
 
 class MoveRequest(BaseModel):
@@ -349,6 +405,8 @@ async def move_items(body: MoveRequest):
             at_sets_root = body.kind == "sets" and "/" not in item.strip("/")
             if at_sets_root and sets.is_set_uuid(item):
                 raise ValueError("pad sets stay on the grid")
+
+            sets.guard_write(body.kind, posixpath.join(body.dest, name).replace("\\", "/"))
 
             if source == dest_abs or dest_abs.startswith(source + "/"):
                 raise ValueError("can't move a folder into itself")
@@ -690,19 +748,29 @@ def _pad_sources(body: KitBuildRequest) -> list[tuple[str, float | None, float |
     return sources
 
 
-def _kit_fx_device(backend, spec: str | None, default: str) -> dict | None:
-    """Resolve a kit FX dropdown value to a device, loading user presets as needed."""
-    if spec is not None and str(spec).strip().startswith(kits.PRESET_PREFIX):
+def _kit_fx_device(backend, spec, default: str) -> dict | None:
+    """Resolve a kit/preset FX dropdown value to a device, loading presets as needed."""
+    if isinstance(spec, dict):
+        device = spec.get("device") if spec.get("source") == "upload" else spec
         try:
-            relative = kits._normalise_effect(spec, default)[len(kits.PRESET_PREFIX) :]
+            return kits.slot_device(device, default)
         except kits.EffectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        target = paths.resolve("effects", relative)
-        if not backend.exists(target):
-            raise HTTPException(status_code=400, detail=f"effect preset not found: {relative}")
+    text = "" if spec is None else str(spec).strip()
+    if text.startswith("factory:"):
+        relative = text[len("factory:") :].strip().replace("\\", "/").lstrip("/")
         try:
-            return kits.device_from_preset(backend.read_file(target), relative)
+            return effects.read_device(backend, "factory", relative)
+        except effects.EffectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if text.startswith(kits.PRESET_PREFIX):
+        try:
+            relative = kits._normalise_effect(text, default)[len(kits.PRESET_PREFIX) :]
         except kits.EffectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            return effects.read_device(backend, "effects", relative)
+        except effects.EffectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         return kits.slot_device(spec, default)
@@ -787,29 +855,6 @@ async def kit_build(body: KitBuildRequest):
     }
 
 
-class EffectDeviceRequest(BaseModel):
-    kind: str
-    parameters: dict = {}
-
-
-class EffectMacroRequest(BaseModel):
-    index: int
-    name: str = ""
-    device: int = 0
-    param: str = ""
-    min: float | None = None
-    max: float | None = None
-
-
-class EffectBuildRequest(BaseModel):
-    name: str
-    folder: str = ""
-    replace: str = ""
-    output: str = "device"
-    devices: list[EffectDeviceRequest] = []
-    macros: list[EffectMacroRequest] = []
-
-
 @app.get("/api/effects/catalog")
 async def effect_catalog():
     return {"effects": effects.catalog()}
@@ -820,93 +865,35 @@ async def effect_presets():
     return {"presets": effects.list_presets(get_backend())}
 
 
-@app.get("/api/effects/load")
-async def effect_load(path: str):
+class EffectParseRequest(BaseModel):
+    preset: dict
+
+
+@app.post("/api/effects/parse")
+async def effect_parse(body: EffectParseRequest):
+    if not body.preset:
+        raise HTTPException(status_code=400, detail="upload an effect file")
     try:
-        absolute = paths.resolve("effects", path)
-    except UnsafePath as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    backend = get_backend()
-    if not backend.exists(absolute) or backend.is_dir(absolute):
-        raise HTTPException(status_code=404, detail="effect preset not found")
-    if posixpath.splitext(absolute)[1].lower() != ".ablpreset":
-        raise HTTPException(status_code=400, detail="select an .ablpreset to edit")
-    try:
-        parsed = effects.parse_preset(backend.read_file(absolute))
+        devices = effects.devices_from_upload(body.preset)
     except effects.EffectError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    relative = paths.relative_to("effects", absolute)
-    if not parsed["name"]:
-        parsed["name"] = posixpath.splitext(posixpath.basename(relative))[0]
-    parsed["path"] = relative
-    parsed["folder"] = posixpath.dirname(relative)
-    return parsed
-
-
-@app.post("/api/effects/build")
-async def effect_build(body: EffectBuildRequest):
-    name = _safe_filename(body.name)
-    try:
-        preset = effects.build_preset(
-            name,
-            [{"kind": item.kind, "parameters": item.parameters} for item in body.devices],
-            [
-                {
-                    "index": item.index,
-                    "name": item.name,
-                    "device": item.device,
-                    "param": item.param,
-                    "min": item.min,
-                    "max": item.max,
-                }
-                for item in body.macros
-            ],
-        )
-    except effects.EffectError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    payload = json.dumps(preset, indent=2).encode("utf-8")
-    filename = f"{name}.ablpreset"
-    if body.output == "file":
-        return Response(
-            content=payload,
-            media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    backend = get_backend()
-    folder = (body.folder or "").replace("\\", "/").strip("/")
-    replace = (body.replace or "").replace("\\", "/").strip("/")
-    if replace and not folder:
-        folder = posixpath.dirname(replace)
-    target = paths.resolve("effects", effects.dest_path(folder, name))
-    replacing = paths.resolve("effects", replace) if replace else None
-    if backend.exists(target) and target != replacing:
-        raise HTTPException(status_code=409, detail=f"{filename} already exists")
-    builder = undo.Builder(backend, f"Save effect {name}")
-    builder.will_overwrite(target)
-    if replacing and replacing != target:
-        builder.will_remove(replacing)
-    backend.write_file(target, payload)
-    if replacing and replacing != target and backend.exists(replacing):
-        backend.remove(replacing)
-    commit_undo(builder)
-    refresh_result = backend.refresh_library()
+    name = (body.preset.get("name") or "").strip()
     return {
-        "ok": True,
-        "path": paths.relative_to("effects", target),
-        "name": filename,
-        "devices": len(body.devices),
-        "refreshed": refresh_result.ok,
-        "refresh_error": None if refresh_result.ok else refresh_result.stderr.strip(),
+        "name": name,
+        "devices": [
+            {"kind": device.get("kind") or "", "name": device.get("name") or "", "device": device}
+            for device in devices
+        ],
     }
 
 
 class TrackInstrumentRef(BaseModel):
     source: str = "presets"
     path: str = ""
+    kind: str = ""
     preset: dict | None = None
-    parameters: dict = {}
+    sample: str = ""
+    variant: str = ""
 
 
 class TrackPresetBuildRequest(BaseModel):
@@ -915,8 +902,22 @@ class TrackPresetBuildRequest(BaseModel):
     replace: str = ""
     output: str = "device"
     instrument: TrackInstrumentRef
-    devices: list[EffectDeviceRequest] = []
-    macros: list[EffectMacroRequest] = []
+    slot1: str | dict = ""
+    slot2: str | dict = ""
+
+
+def _loaded_preset(loaded: dict) -> dict:
+    return {
+        "name": loaded["name"],
+        "kind": loaded["kind"],
+        "source": loaded["source"],
+        "path": loaded["path"],
+        "instrument": loaded["device"],
+        "sample": presets.sample_spec_from_uri(loaded.get("sample") or ""),
+        "slot1": loaded.get("slot1") or "",
+        "slot2": loaded.get("slot2") or "",
+        "folder": posixpath.dirname(loaded["path"]) if loaded["source"] == "presets" else "",
+    }
 
 
 @app.get("/api/presets/instruments")
@@ -924,9 +925,9 @@ async def preset_instruments():
     return {"instruments": presets.list_instruments(get_backend())}
 
 
-@app.get("/api/presets/catalog")
-async def preset_catalog():
-    return {"instruments": instruments.catalog()}
+@app.get("/api/presets/samples")
+async def preset_samples():
+    return {"samples": presets.list_samples(get_backend())}
 
 
 @app.get("/api/presets/load")
@@ -935,17 +936,7 @@ async def preset_load(source: str, path: str):
         loaded = presets.load_instrument(get_backend(), source, path)
     except (presets.PresetError, UnsafePath) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "name": loaded["name"],
-        "kind": loaded["kind"],
-        "source": loaded["source"],
-        "path": loaded["path"],
-        "instrument": loaded["device"],
-        "parameters": loaded.get("parameters") or {},
-        "effects": loaded["effects"],
-        "macros": loaded.get("macros") or [],
-        "folder": posixpath.dirname(loaded["path"]) if loaded["source"] == "presets" else "",
-    }
+    return _loaded_preset(loaded)
 
 
 @app.post("/api/presets/parse")
@@ -956,17 +947,9 @@ async def preset_parse(body: TrackInstrumentRef):
         loaded = presets.load_inline(body.preset)
     except presets.PresetError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "name": loaded["name"],
-        "kind": loaded["kind"],
-        "source": loaded["source"],
-        "path": loaded["path"],
-        "instrument": loaded["device"],
-        "parameters": loaded.get("parameters") or {},
-        "effects": loaded["effects"],
-        "macros": loaded.get("macros") or [],
-        "folder": "",
-    }
+    parsed = _loaded_preset(loaded)
+    parsed["folder"] = ""
+    return parsed
 
 
 @app.post("/api/presets/build")
@@ -976,26 +959,19 @@ async def preset_build(body: TrackPresetBuildRequest):
     try:
         if body.instrument.preset:
             loaded = presets.load_inline(body.instrument.preset)
+        elif body.instrument.source == "default":
+            loaded = presets.load_default(body.instrument.kind, body.instrument.variant)
         else:
             loaded = presets.load_instrument(backend, body.instrument.source, body.instrument.path)
+        if body.instrument.sample:
+            presets.apply_sample(loaded["device"], body.instrument.sample)
         preset = presets.build_track_preset(
             name,
             loaded["device"],
-            [{"kind": item.kind, "parameters": item.parameters} for item in body.devices],
-            [
-                {
-                    "index": item.index,
-                    "name": item.name,
-                    "device": item.device,
-                    "param": item.param,
-                    "min": item.min,
-                    "max": item.max,
-                }
-                for item in body.macros
-            ],
-            body.instrument.parameters,
+            _kit_fx_device(backend, body.slot1, ""),
+            _kit_fx_device(backend, body.slot2, ""),
         )
-    except (presets.PresetError, UnsafePath) as exc:
+    except (presets.PresetError, UnsafePath, kits.EffectError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     payload = json.dumps(preset, indent=2).encode("utf-8")
@@ -1028,7 +1004,7 @@ async def preset_build(body: TrackPresetBuildRequest):
         "ok": True,
         "path": paths.relative_to("presets", target),
         "name": filename,
-        "devices": len(body.devices),
+        "devices": len(preset["chains"][0]["devices"]),
         "refreshed": refresh_result.ok,
         "refresh_error": None if refresh_result.ok else refresh_result.stderr.strip(),
     }

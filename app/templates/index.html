@@ -3,18 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Move My Ass</title>
+<title>Move My Ass v1</title>
 <link rel="icon" href="/static/logo.png?v=glitch3">
-<link rel="stylesheet" href="/static/style.css?v=liveui8">
+<link rel="stylesheet" href="/static/style.css?v=liveui36">
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
     <img class="logo" src="/static/logo.png?v=glitch3" width="168" height="56" alt="Move My Ass">
   </div>
-  <div class="conn" id="conn">
-    <span class="dot" id="conn-dot"></span>
-    <span id="conn-text">checking…</span>
+  <div class="drop conn-drop" id="conn-drop">
+    <button type="button" class="conn" id="conn" aria-haspopup="listbox" aria-expanded="false" title="Switch between mock folder and real Move">
+      <span class="dot" id="conn-dot"></span>
+      <span id="conn-text">checking…</span>
+    </button>
   </div>
   <div class="storage" id="storage" hidden>
     <div class="storage-bar" id="storage-bar" role="img" aria-label="Device storage"></div>
@@ -112,15 +114,11 @@
     <div class="spacer"></div>
     <span class="selcount" id="selcount"></span>
     <button id="btn-upload" class="primary">Upload files</button>
-    <button id="btn-upload-folder" class="ghost">Upload folder</button>
+    <button id="btn-upload-folder" class="ghost" title="Fill empty pads; extras go off the 32-pad grid">Upload folder</button>
     <button id="btn-mkdir" class="ghost">New folder</button>
     <div class="toolbar-kit" id="toolbar-kit">
       <button id="btn-kit">Build kit from folder</button>
       <button id="btn-slice" disabled>Slice into kit</button>
-    </div>
-    <div class="toolbar-fx" id="toolbar-fx" hidden>
-      <button id="btn-fx" class="make">Make effect</button>
-      <button id="btn-fx-edit" disabled>Edit effect</button>
     </div>
     <div class="toolbar-fx" id="toolbar-preset" hidden>
       <button id="btn-preset" class="make">Make preset</button>
@@ -130,6 +128,7 @@
 
   <input type="file" id="file-input" multiple hidden>
   <input type="file" id="folder-input" webkitdirectory multiple hidden>
+  <input type="file" id="set-file-input" accept=".ablbundle,.zip,.abl,application/zip" multiple hidden>
 
   <div id="drop" class="dropzone">
     <table class="listing">
@@ -218,32 +217,83 @@
   </div>
 </dialog>
 
-<dialog id="fx">
-  <div class="fx-bar">
-    <input id="fx-name" placeholder="My Effect" autocomplete="off" spellcheck="false" aria-label="Effect name">
-    <div class="fx-macros" id="fx-macros"></div>
-    <button type="button" id="fx-macros-fill" class="ghost">Fill knobs</button>
-  </div>
-  <div id="fx-instrument" class="fx-instrument" hidden>
-    <label>Instrument
-      <select id="fx-instrument-select">
-        <option value="">Pick an instrument…</option>
-      </select>
+<dialog id="preset">
+  <div class="studio-top">
+    <div class="studio-title">
+      <span class="kicker">Track preset</span>
+      <h2 id="preset-title">Make preset</h2>
+    </div>
+    <label class="preset-name-field">Preset name
+      <input id="preset-name" placeholder="My Preset" autocomplete="off" spellcheck="false">
     </label>
-    <button type="button" id="fx-instrument-upload" class="ghost">Upload</button>
-    <input id="fx-instrument-file" type="file" accept=".ablpreset,.json,application/json" hidden>
-    <span class="hint" id="fx-instrument-info"></span>
   </div>
-  <div class="fx-add" id="fx-add"></div>
-  <div class="fx-chain" id="fx-chain"></div>
-  <div class="fx-foot">
-    <p class="hint" id="fx-hint">Add devices to the rack, then click a knob to map it.</p>
+  <div class="preset-slots">
+    <section class="preset-card instrument">
+      <header>
+        <span class="kicker">Sound</span>
+        <h3>Instrument</h3>
+      </header>
+      <label>Type
+        <select id="preset-instrument-kind">
+          <option value="">Pick a type…</option>
+        </select>
+      </label>
+      <label>Preset
+        <select id="preset-instrument" disabled>
+          <option value="">Pick a preset…</option>
+        </select>
+      </label>
+      <label id="preset-sample-field" hidden>Sample
+        <select id="preset-sample">
+          <option value="">Pick a sample…</option>
+        </select>
+      </label>
+    </section>
+    <section class="preset-card effect">
+      <header>
+        <span class="kicker">Slot 1</span>
+        <h3>Effect</h3>
+      </header>
+      <label>Type
+        <select id="preset-slot1-kind">
+          <option value="">Off</option>
+        </select>
+      </label>
+      <label>Preset
+        <select id="preset-slot1" disabled>
+          <option value="">Off</option>
+        </select>
+      </label>
+    </section>
+    <section class="preset-card effect">
+      <header>
+        <span class="kicker">Slot 2</span>
+        <h3>Effect</h3>
+      </header>
+      <label>Type
+        <select id="preset-slot2-kind">
+          <option value="">Off</option>
+        </select>
+      </label>
+      <label>Preset
+        <select id="preset-slot2" disabled>
+          <option value="">Off</option>
+        </select>
+      </label>
+    </section>
+  </div>
+  <div class="studio-foot">
+    <p class="hint" id="preset-hint"></p>
     <menu>
-      <button type="button" id="fx-cancel" class="ghost">Cancel</button>
-      <button type="button" id="fx-download" class="ghost">Download</button>
-      <button type="button" id="fx-save" class="primary">Save to Move</button>
+      <button type="button" id="preset-cancel" class="ghost">Cancel</button>
+      <button type="button" id="preset-instrument-upload" class="ghost">Upload instrument</button>
+      <button type="button" id="preset-effects-upload" class="ghost">Upload effects</button>
+      <button type="button" id="preset-download" class="ghost">Download</button>
+      <button type="button" id="preset-save" class="primary">Save to Move</button>
     </menu>
   </div>
+  <input id="preset-instrument-file" type="file" accept=".ablpreset,.json,application/json" hidden>
+  <input id="preset-effects-file" type="file" accept=".ablpreset,.json,application/json" hidden>
 </dialog>
 
 <footer class="statusbar">
@@ -253,7 +303,6 @@
 </footer>
 
 <div id="toasts"></div>
-<script src="/static/fx-viz.js?v=liveui7"></script>
-<script src="/static/app.js?v=liveui8"></script>
+<script src="/static/app.js?v=liveui36"></script>
 </body>
 </html>

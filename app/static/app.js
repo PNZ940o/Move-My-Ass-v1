@@ -225,24 +225,128 @@ $("ask").addEventListener("cancel", () => settleAsk(null));
 
 /* ---------- connection ---------- */
 
+let connStatus = null;
+let connBusy = false;
+
+function applyStatus(status) {
+  connStatus = status;
+  const isMock = status.mode !== "sftp";
+  $("conn-dot").className = `dot ${isMock ? "mock" : status.connected ? "on" : "off"}`;
+  $("conn-text").textContent = isMock
+    ? "mock folder"
+    : `${status.user}@${status.host}${status.connected ? "" : " (idle)"}`;
+  $("conn").title = isMock
+    ? "Using mock folder — click to switch device"
+    : "Using real Move — click to switch device";
+  $("f-backend").value = status.mode;
+  $("f-host").value = status.host || "";
+  $("f-user").value = status.user || "";
+  $("f-key").value = status.key_path || "";
+  if (status.last_error) $("settings-hint").textContent = status.last_error;
+}
+
 async function loadStatus() {
   try {
-    const status = await api("/api/status");
-    const dot = $("conn-dot");
-    const isMock = status.mode !== "sftp";
-    dot.className = `dot ${isMock ? "mock" : status.connected ? "on" : "off"}`;
-    $("conn-text").textContent = isMock
-      ? "mock folder"
-      : `${status.user}@${status.host}${status.connected ? "" : " (idle)"}`;
-    $("f-backend").value = status.mode;
-    $("f-host").value = status.host || "";
-    $("f-user").value = status.user || "";
-    $("f-key").value = status.key_path || "";
-    if (status.last_error) $("settings-hint").textContent = status.last_error;
+    applyStatus(await api("/api/status"));
   } catch (error) {
     toast(error.message, "error");
   }
 }
+
+function closeConnMenu() {
+  $("conn-drop")?.classList.remove("open");
+  $("conn")?.setAttribute("aria-expanded", "false");
+  document.querySelectorAll(".conn-menu").forEach((el) => el.remove());
+}
+
+function connMenuItem(backend, title, hint, dotClass, selected) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = `drop-item conn-choice${selected ? " on" : ""}`;
+  item.setAttribute("role", "option");
+  item.setAttribute("aria-selected", selected ? "true" : "false");
+  const dot = document.createElement("span");
+  dot.className = `dot ${dotClass}`;
+  const copy = document.createElement("span");
+  copy.className = "conn-choice-copy";
+  const name = document.createElement("strong");
+  name.textContent = title;
+  const note = document.createElement("small");
+  note.textContent = hint;
+  copy.append(name, note);
+  item.append(dot, copy);
+  item.onclick = () => switchBackend(backend);
+  return item;
+}
+
+function openConnMenu() {
+  const wrap = $("conn-drop");
+  const btn = $("conn");
+  wrap.classList.add("open");
+  btn.setAttribute("aria-expanded", "true");
+  const menu = document.createElement("div");
+  menu.className = "drop-menu conn-menu";
+  menu.setAttribute("role", "listbox");
+  const status = connStatus || {};
+  const host = status.user && status.host ? `${status.user}@${status.host}` : "ableton@move.local";
+  menu.append(
+    connMenuItem(
+      "mock",
+      "Mock folder",
+      "Local fake device — no hardware needed",
+      "mock",
+      status.mode === "mock",
+    ),
+    connMenuItem(
+      "sftp",
+      host,
+      status.connected && status.mode === "sftp" ? "Real Move over SFTP" : "Real Move over SFTP — connect",
+      status.connected && status.mode === "sftp" ? "on" : "off",
+      status.mode === "sftp",
+    ),
+  );
+  document.body.append(menu);
+  const box = btn.getBoundingClientRect();
+  menu.style.top = `${Math.round(box.bottom + 6)}px`;
+  menu.style.left = `${Math.round(box.left)}px`;
+  menu.style.maxHeight = `${Math.max(8, window.innerHeight - box.bottom - 8)}px`;
+}
+
+async function switchBackend(backend) {
+  closeDownMenus();
+  const status = connStatus || {};
+  if (status.mode === backend && (backend === "mock" || status.connected)) return;
+  connBusy = true;
+  $("conn").disabled = true;
+  $("conn-text").textContent = backend === "mock" ? "opening mock…" : "connecting…";
+  try {
+    applyStatus(await apiJson("/api/connect", {
+      backend,
+      host: $("f-host").value,
+      user: $("f-user").value,
+      key_path: $("f-key").value,
+    }));
+    toast(backend === "mock" ? "Using mock folder" : "Connected to Move", "ok");
+    await load();
+    refreshStorage();
+  } catch (error) {
+    toast(error.message, "error");
+    await loadStatus();
+  } finally {
+    connBusy = false;
+    $("conn").disabled = false;
+  }
+}
+
+$("conn").addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (connBusy) return;
+  const wrap = $("conn-drop");
+  const open = wrap.classList.contains("open");
+  closeDownMenus();
+  if (!open) openConnMenu();
+});
 
 $("btn-settings").onclick = () => $("settings").showModal();
 
@@ -254,16 +358,15 @@ $("settings-form").addEventListener("submit", async (event) => {
   hint.className = "hint";
   hint.textContent = "Connecting…";
   try {
-    await apiJson("/api/connect", {
+    applyStatus(await apiJson("/api/connect", {
       backend: $("f-backend").value,
       host: $("f-host").value,
       user: $("f-user").value,
       key_path: $("f-key").value,
-    });
+    }));
     hint.textContent = "";
     $("settings").close();
     toast("Connected", "ok");
-    await loadStatus();
     await load();
     refreshStorage();
   } catch (error) {
@@ -972,14 +1075,6 @@ function makeRow(item, depth) {
       cancelPendingRename();
       toggleFolder(item.path);
     });
-  } else if (state.kind === "effects" && isFxPreset(item)) {
-    tr.addEventListener("dblclick", (event) => {
-      if (event.target.closest("input[type=checkbox], .name-edit")) return;
-      event.preventDefault();
-      cancelPendingRename();
-      selectOnly(item.path);
-      openFxEditor(item.path);
-    });
   } else if (state.kind === "presets" && isTrackPreset(item)) {
     tr.addEventListener("dblclick", (event) => {
       if (event.target.closest("input[type=checkbox], .name-edit")) return;
@@ -1124,6 +1219,8 @@ function hideSetGrid() {
   $("setgrid").innerHTML = "";
   $("set-loose").hidden = true;
   $("set-loose").innerHTML = "";
+  const overlay = document.querySelector(".drop-overlay span");
+  if (overlay) overlay.textContent = "Drop to upload here";
 }
 
 function renderSetGrid() {
@@ -1132,6 +1229,8 @@ function renderSetGrid() {
   $("drop").classList.add("set-pads");
   document.querySelector("table.listing").hidden = true;
   grid.hidden = false;
+  const overlay = document.querySelector(".drop-overlay span");
+  if (overlay) overlay.textContent = "Drop a .ablbundle to import";
 
   const byPad = new Map();
   const extras = [];
@@ -1161,7 +1260,7 @@ function renderSetGrid() {
   loose.append(title);
   const hint = document.createElement("div");
   hint.className = "set-loose-hint";
-  hint.textContent = "Drop a set here to keep a copy on Move, off the pad grid. Drop on an empty pad to copy it onto a pad.";
+  hint.textContent = "Drop a set from the grid, or a .ablbundle from your PC. Move cannot open off-grid copies until you drop them onto an empty pad.";
   loose.append(hint);
   for (const item of extras) {
     const isSet = item.category === "set";
@@ -1353,6 +1452,125 @@ async function copySetToPad(path, pad, name) {
     toast(error.message, "error");
   }
   setStatus("Ready");
+}
+
+function isSetArchivePath(path) {
+  const base = (path || "").replace(/\\/g, "/").split("/").pop() || "";
+  if (base.toLowerCase() === "song.abl") return false;
+  return /\.(ablbundle|zip|abl)$/i.test(base);
+}
+
+function groupSetEntries(entries) {
+  const items = entries.map((entry) => ({
+    ...entry,
+    path: (entry.path || entry.file.name || "").replace(/\\/g, "/").replace(/^\/+/, ""),
+  }));
+  const songDirs = [];
+  const seen = new Set();
+  for (const entry of items) {
+    if (!/(^|\/)Song\.abl$/i.test(entry.path)) continue;
+    const dir = entry.path.replace(/\/?Song\.abl$/i, "");
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    songDirs.push(dir);
+  }
+  songDirs.sort((a, b) => b.split("/").filter(Boolean).length - a.split("/").filter(Boolean).length || b.length - a.length);
+
+  const claimed = new Set();
+  const groups = [];
+  for (const dir of songDirs) {
+    const prefix = dir ? `${dir}/` : "";
+    const batch = [];
+    for (const entry of items) {
+      if (claimed.has(entry.path)) continue;
+      if (dir) {
+        if (entry.path !== `${dir}/Song.abl` && !entry.path.startsWith(prefix)) continue;
+      } else if (isSetArchivePath(entry.path)) {
+        continue;
+      }
+      batch.push(entry);
+      claimed.add(entry.path);
+    }
+    if (batch.length) groups.push(batch);
+  }
+  for (const entry of items) {
+    if (claimed.has(entry.path) || !isSetArchivePath(entry.path)) continue;
+    groups.push([entry]);
+    claimed.add(entry.path);
+  }
+  return groups;
+}
+
+async function importSetEntries(entries, options = {}) {
+  if (!entries.length) return;
+  const { pad = null, offGrid = false } = options;
+  const batches = groupSetEntries(entries);
+  if (!batches.length) {
+    toast("That isn't a Move set — use a .ablbundle, .zip, or a folder with Song.abl", "error");
+    return;
+  }
+  const imported = [];
+  const failures = [];
+  for (const [index, batch] of batches.entries()) {
+    setStatus(batches.length > 1 ? `Importing set ${index + 1} of ${batches.length}…` : "Importing set…");
+    const sendPad = !offGrid && index === 0 && Number.isInteger(pad) ? pad : null;
+    try {
+      imported.push(...await sendSetImport(batch, { pad: sendPad, offGrid }));
+    } catch (error) {
+      const label = batch[0]?.path || batch[0]?.file?.name || `set ${index + 1}`;
+      failures.push({ name: label.split("/").pop(), error: error.message });
+    }
+  }
+  const onPads = imported.filter((item) => item.pad);
+  const off = imported.filter((item) => !item.pad);
+  if (imported.length === 1) {
+    const item = imported[0];
+    if (item.pad) toast(`Imported ${item.name} onto pad ${item.pad}`, "ok");
+    else toast(`Imported ${item.name} off the pad grid`, "ok");
+  } else if (imported.length) {
+    if (onPads.length) {
+      toast(`Filled ${onPads.length} empty pad${onPads.length === 1 ? "" : "s"}`, "ok");
+    }
+    if (off.length) {
+      toast(`Saved ${off.length} off the pad grid`, "ok");
+    }
+  }
+  for (const failure of failures.slice(0, 3)) toast(`${failure.name}: ${failure.error}`, "error");
+  const keep = imported.length ? imported[imported.length - 1].path : null;
+  await load();
+  refreshStorage();
+  if (keep) {
+    state.selected = new Set([keep]);
+    renderRows();
+  }
+  setStatus("Ready");
+}
+
+function sendSetImport(entries, { pad, offGrid }) {
+  const form = new FormData();
+  if (offGrid) form.append("off_grid", "true");
+  else if (Number.isInteger(pad)) form.append("pad", String(pad));
+  for (const entry of entries) {
+    form.append("files", entry.file, entry.file.name);
+    form.append("relpaths", entry.path || entry.file.name);
+  }
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/import-set");
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        setStatus(`Importing… ${Math.round((event.loaded / event.total) * 100)}%`);
+      }
+    };
+    request.onload = () => {
+      let body = {};
+      try { body = JSON.parse(request.responseText); } catch {}
+      if (request.status >= 200 && request.status < 300) resolve(body.imported || []);
+      else reject(new Error(body.detail || `import failed (${request.status})`));
+    };
+    request.onerror = () => reject(new Error("network error during import"));
+    request.send(form);
+  });
 }
 
 const expandGen = {};
@@ -1579,22 +1797,24 @@ function renderSelection() {
         : "Download";
 
   const factory = isFactory();
+  const setsRoot = showingSetPads();
   const only = count === 1 ? itemByPath([...state.selected][0]) : null;
   const samplesSection = !factory && state.kind === "samples";
   const recordingsSection = !factory && state.kind === "recordings";
   const audioSection = samplesSection || recordingsSection;
   $("btn-upload").hidden = factory;
+  $("btn-upload").textContent = setsRoot ? "Upload set" : "Upload files";
   $("btn-upload-folder").hidden = factory;
-  $("btn-mkdir").hidden = factory;
-  $("btn-mkdir").disabled = factory;
+  $("btn-upload-folder").title = setsRoot
+    ? "Fill empty pads; extras go off the 32-pad grid"
+    : "Upload a folder of files";
+  $("btn-mkdir").hidden = factory || setsRoot;
+  $("btn-mkdir").disabled = factory || setsRoot;
   $("btn-kit").hidden = !audioSection;
   $("btn-kit").disabled = !audioSection;
   $("btn-slice").hidden = !samplesSection;
   $("btn-slice").disabled = !(samplesSection && only?.category === "audio" && only.name.toLowerCase().endsWith(".wav"));
   $("toolbar-kit").hidden = !audioSection;
-  const effectsSection = !factory && state.kind === "effects";
-  $("toolbar-fx").hidden = !effectsSection;
-  $("btn-fx-edit").disabled = !(effectsSection && isFxPreset(only));
   const presetsSection = !factory && state.kind === "presets";
   $("toolbar-preset").hidden = !presetsSection;
   $("btn-preset-edit").disabled = !(presetsSection && isTrackPreset(only));
@@ -1627,6 +1847,7 @@ async function load() {
       state.setLabels = Object.fromEntries(
         data.items.filter((i) => i.category === "set").map((i) => [i.path, i.name])
       );
+      for (const warning of data.warnings || []) toast(warning, "error");
     }
     if (state.playing && !knownItems().some((i) => previewUrl(i) === state.playing)) {
       stopPlayback();
@@ -1717,6 +1938,10 @@ function sendBatch(entries) {
 
 async function uploadEntries(entries) {
   if (!entries.length) return;
+  if (showingSetPads()) {
+    await importSetEntries(entries);
+    return;
+  }
   const batches = chunk(entries);
   let written = 0;
   const failures = [];
@@ -1745,7 +1970,10 @@ async function uploadEntries(entries) {
   }
 }
 
-$("btn-upload").onclick = () => $("file-input").click();
+$("btn-upload").onclick = () => {
+  if (showingSetPads()) $("set-file-input").click();
+  else $("file-input").click();
+};
 $("btn-upload-folder").onclick = () => $("folder-input").click();
 
 const fromInput = (input) =>
@@ -1757,6 +1985,10 @@ $("file-input").onchange = (event) => {
 };
 $("folder-input").onchange = (event) => {
   uploadEntries(fromInput(event.target));
+  event.target.value = "";
+};
+$("set-file-input").onchange = (event) => {
+  importSetEntries(fromInput(event.target));
   event.target.value = "";
 };
 
@@ -1817,6 +2049,19 @@ drop.addEventListener("drop", async (event) => {
   if (internalMove || internalSetCopy) return;
   if (isFactory()) {
     toast("Factory library is read-only — copy items into Samples", "error");
+    return;
+  }
+  if (showingSetPads()) {
+    const entries = await collectDropped(event.dataTransfer);
+    const hit = setDropFromPoint(event.clientX, event.clientY);
+    if (hit?.kind === "filled-pad") {
+      toast(`Pad ${hit.pad} already has a set`, "error");
+      return;
+    }
+    await importSetEntries(entries, {
+      pad: hit?.kind === "empty-pad" ? hit.pad : null,
+      offGrid: hit?.kind === "offgrid",
+    });
     return;
   }
   setStatus("Reading dropped files…");
@@ -2153,12 +2398,7 @@ async function loadKitPadWaveform(index) {
 }
 
 async function loadKitPadWaveforms() {
-  const order = [];
-  if (kitAudio.selected != null) order.push(kitAudio.selected);
   for (let index = 0; index < 16; index++) {
-    if (index !== kitAudio.selected) order.push(index);
-  }
-  for (const index of order) {
     if (!$("kit").open) return;
     if (!kitPadSource(index)) continue;
     await loadKitPadWaveform(index);
@@ -2738,12 +2978,6 @@ async function ensureFxCatalog() {
   if (fx.catalog) return;
   const data = await api("/api/effects/catalog");
   fx.catalog = data.effects;
-}
-
-async function ensureInstrumentCatalog() {
-  if (fx.instrumentCatalog) return;
-  const data = await api("/api/presets/catalog");
-  fx.instrumentCatalog = data.instruments || [];
 }
 
 function kitFxOption(value, label, selected) {
@@ -4444,16 +4678,576 @@ async function loadInstrumentChoice(value) {
   syncInstrumentSelect();
 }
 
+const preset = {
+  instrument: null,
+  instruments: [],
+  samples: [],
+  fxPresets: [],
+  uploads: { slot1: null, slot2: null },
+  editPath: "",
+  editFolder: "",
+};
+
+const PRESET_INSTRUMENT_FAMILIES = [
+  { kind: "drift", name: "Drift" },
+  { kind: "wavetable", name: "Wavetable" },
+  { kind: "drumRack", name: "Drum Rack" },
+  { kind: "melodicSampler", name: "Sampler" },
+];
+
+const DRUM_KIT_PRESETS = [
+  { variant: "drum", name: "Sample kit" },
+  { variant: "choke", name: "Choke kit" },
+  { variant: "gate", name: "Gate kit" },
+];
+
+const PRESET_FX_FALLBACK = [
+  { kind: "reverb", name: "Reverb" },
+  { kind: "delay", name: "Delay" },
+  { kind: "autoFilter", name: "Auto Filter" },
+  { kind: "chorus", name: "Chorus-Ensemble" },
+  { kind: "phaser", name: "Phaser-Flanger" },
+  { kind: "autoPan", name: "Auto Pan" },
+  { kind: "autoShift", name: "Auto Shift" },
+  { kind: "erosion", name: "Erosion" },
+  { kind: "saturator", name: "Saturator" },
+  { kind: "channelEq", name: "Channel EQ" },
+  { kind: "compressor", name: "Compressor" },
+  { kind: "limiter", name: "Limiter" },
+  { kind: "redux2", name: "Redux" },
+];
+
+function instrumentChoiceValue(item) {
+  return `${item.source}:${item.path}`;
+}
+
+function instrumentSourceLabel(item) {
+  if (!item) return "";
+  if (item.source === "factory") return "Core Library";
+  if (item.source === "upload") return "Uploaded";
+  return "User library";
+}
+
+function isEngineType(value) {
+  return PRESET_INSTRUMENT_FAMILIES.some((item) => item.kind === value);
+}
+
+function isSoundType(value) {
+  return String(value || "").startsWith("sound:");
+}
+
+function soundCategoryKey(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+function soundTypeValue(name) {
+  return "sound:" + soundCategoryKey(name);
+}
+
+function listedInstrument(item) {
+  if (!item || !item.path) return null;
+  return preset.instruments.find((entry) => entry.source === item.source && entry.path === item.path) || null;
+}
+
+function instrumentKindOf(item) {
+  if (!item) return "";
+  if (item.source === "default") return item.kind || "";
+  const listed = listedInstrument(item);
+  if (listed?.kind && isEngineType(listed.kind)) return listed.kind;
+  if (item.kind && isEngineType(item.kind)) return item.kind;
+  if (item.source === "upload") return item.kind || "upload";
+  return "";
+}
+
+function instrumentTypeOf(item) {
+  if (!item) return "";
+  const engine = instrumentKindOf(item);
+  if (engine) return engine;
+  const listed = listedInstrument(item);
+  const category = listed?.category || item.category || "";
+  return category ? soundTypeValue(category) : "";
+}
+
+function isSamplerKind(kind) {
+  return kind === "melodicSampler";
+}
+
+function selectedInstrumentIsSampler() {
+  return $("preset-instrument-kind")?.value === "melodicSampler";
+}
+
+function syncSamplerSampleField() {
+  const field = $("preset-sample-field");
+  if (!field) return;
+  field.hidden = !selectedInstrumentIsSampler();
+}
+
+function soundCategories() {
+  const found = new Map();
+  const skip = new Set(["samples", "sample", "recordings", "recording"]);
+  for (const item of preset.instruments) {
+    if (!item.category) continue;
+    const key = soundCategoryKey(item.category);
+    if (skip.has(key)) continue;
+    if (!found.has(key)) found.set(key, item.category);
+  }
+  return [...found.entries()]
+    .sort((left, right) => left[1].localeCompare(right[1]))
+    .map(([key, name]) => ({ value: "sound:" + key, name }));
+}
+
+function instrumentsForType(type) {
+  if (isEngineType(type)) return preset.instruments.filter((item) => item.kind === type);
+  if (isSoundType(type)) {
+    const category = type.slice("sound:".length);
+    return preset.instruments.filter((item) => soundCategoryKey(item.category) === category);
+  }
+  return [];
+}
+
+function stockFxSpecs() {
+  return fx.catalog && fx.catalog.length ? fx.catalog : PRESET_FX_FALLBACK;
+}
+
+function stockFxName(kind) {
+  return (stockFxSpecs().find((item) => item.kind === kind) || {}).name || kind;
+}
+
+function fxPresetValue(item) {
+  if (item.source === "factory") return "factory:" + item.path;
+  return "preset:" + item.path;
+}
+
+function fxKindFromSlot(value) {
+  if (!value) return "";
+  if (value === "upload:") return "";
+  if (!String(value).startsWith("preset:") && !String(value).startsWith("factory:")) return value;
+  const item = (preset.fxPresets || []).find((entry) => fxPresetValue(entry) === value);
+  return item?.kind || "";
+}
+
+async function fillPresetFxSelects(slot1, slot2) {
+  try {
+    await ensureFxCatalog();
+  } catch (error) {
+    if (!fx.catalog) toast(error.message, "error");
+  }
+  try {
+    const data = await api("/api/effects/presets");
+    preset.fxPresets = data.presets || [];
+  } catch {
+    preset.fxPresets = [];
+  }
+  populatePresetFxKindSelect($("preset-slot1-kind"), fxKindFromSlot(slot1));
+  populatePresetFxKindSelect($("preset-slot2-kind"), fxKindFromSlot(slot2));
+  populatePresetFxSelect($("preset-slot1"), $("preset-slot1-kind")?.value || "", slot1 ?? "");
+  populatePresetFxSelect($("preset-slot2"), $("preset-slot2-kind")?.value || "", slot2 ?? "");
+}
+
+function populatePresetFxKindSelect(select, selected) {
+  if (!select) return;
+  const onchange = select.onchange;
+  select.onchange = null;
+  select.innerHTML = "";
+  select.append(kitFxOption("", "Off", !selected));
+  for (const spec of stockFxSpecs()) {
+    select.append(kitFxOption(spec.kind, spec.name, spec.kind === selected));
+  }
+  if (selected && ![...select.options].some((option) => option.value === selected)) {
+    select.append(kitFxOption(selected, selected, true));
+  }
+  select.value = selected || "";
+  select.onchange = onchange;
+}
+
+function populatePresetFxSelect(select, kind, selected) {
+  if (!select) return;
+  const onchange = select.onchange;
+  select.onchange = null;
+  select.innerHTML = "";
+  const selectedPreset = String(selected || "").startsWith("preset:") || String(selected || "").startsWith("factory:") || selected === "upload:";
+  if (!kind && !selectedPreset) {
+    select.append(kitFxOption("", "Off", true));
+    select.disabled = true;
+    select.onchange = onchange;
+    return;
+  }
+  select.disabled = false;
+  if (kind) {
+    select.append(kitFxOption(kind, `Default (${stockFxName(kind)})`, selected === kind || !selected));
+  } else {
+    select.append(kitFxOption("", "Pick a preset…", !selectedPreset));
+  }
+  const uploaded = select.id === "preset-slot2" ? preset.uploads.slot2 : preset.uploads.slot1;
+  if (uploaded && (!kind || uploaded.kind === kind)) {
+    select.append(kitFxOption("upload:", uploaded.name || "Uploaded effect", selected === "upload:"));
+  }
+  const matching = (preset.fxPresets || []).filter((item) => kind && item.kind === kind);
+  function appendGroup(label, items) {
+    const group = document.createElement("optgroup");
+    group.label = label;
+    if (!items.length) {
+      const empty = kitFxOption("", "No presets", false);
+      empty.disabled = true;
+      group.append(empty);
+    } else {
+      for (const item of items) {
+        group.append(kitFxOption(fxPresetValue(item), item.name || item.label, fxPresetValue(item) === selected));
+      }
+    }
+    select.append(group);
+  }
+  if (kind) {
+    appendGroup("User library", matching.filter((item) => (item.source || "effects") === "effects"));
+    appendGroup("Core Library", matching.filter((item) => item.source === "factory"));
+  }
+  select.value = selected || kind || "";
+  select.onchange = onchange;
+}
+
+async function loadPresetInstrumentCatalog() {
+  try {
+    const data = await api("/api/presets/instruments");
+    preset.instruments = data.instruments || [];
+  } catch (error) {
+    preset.instruments = [];
+    toast(error.message, "error");
+  }
+}
+
+async function loadPresetSampleCatalog() {
+  try {
+    const data = await api("/api/presets/samples");
+    preset.samples = data.samples || [];
+  } catch {
+    preset.samples = [];
+  }
+}
+
+function populateInstrumentKindSelect() {
+  const select = $("preset-instrument-kind");
+  if (!select) return;
+  const onchange = select.onchange;
+  select.onchange = null;
+  const current = instrumentTypeOf(preset.instrument);
+  select.innerHTML = "";
+  select.append(kitFxOption("", "Pick a type…", !current));
+  const instruments = document.createElement("optgroup");
+  instruments.label = "Instruments";
+  for (const group of PRESET_INSTRUMENT_FAMILIES) {
+    instruments.append(kitFxOption(group.kind, group.name, group.kind === current));
+  }
+  select.append(instruments);
+  const sounds = soundCategories();
+  if (sounds.length) {
+    const group = document.createElement("optgroup");
+    group.label = "Sounds";
+    for (const sound of sounds) {
+      group.append(kitFxOption(sound.value, sound.name, sound.value === current));
+    }
+    select.append(group);
+  }
+  select.value = current || "";
+  select.onchange = onchange;
+  syncSamplerSampleField();
+}
+
+function populateInstrumentPresetSelect() {
+  const select = $("preset-instrument");
+  if (!select) return;
+  const onchange = select.onchange;
+  select.onchange = null;
+  const type = $("preset-instrument-kind")?.value || "";
+  const current = preset.instrument && preset.instrument.source !== "upload" && preset.instrument.path
+    ? instrumentChoiceValue(preset.instrument)
+    : (preset.instrument?.source === "default" ? `default:${preset.instrument.kind}` : "");
+  select.innerHTML = "";
+  if (!type) {
+    select.append(kitFxOption("", "Pick a type first", true));
+    select.disabled = true;
+    select.onchange = onchange;
+    syncSamplerSampleField();
+    return;
+  }
+  select.disabled = false;
+  const family = PRESET_INSTRUMENT_FAMILIES.find((item) => item.kind === type);
+  const items = instrumentsForType(type);
+  const defaultValue = preset.instrument?.source === "default"
+    ? (preset.instrument.kind === "drumRack"
+      ? `default:drumRack:${preset.instrument.variant || "drum"}`
+      : `default:${preset.instrument.kind}`)
+    : "";
+  const usingDefault = Boolean(defaultValue) && preset.instrument?.kind === type;
+  select.append(kitFxOption("", "Pick a preset…", !current && preset.instrument?.source !== "upload" && !usingDefault));
+  if (type === "drumRack") {
+    const kits = document.createElement("optgroup");
+    kits.label = "Kits";
+    for (const kit of DRUM_KIT_PRESETS) {
+      const value = `default:drumRack:${kit.variant}`;
+      kits.append(kitFxOption(value, kit.name, defaultValue === value));
+    }
+    select.append(kits);
+  } else if (family) {
+    select.append(kitFxOption(`default:${type}`, `Default ${family.name}`, usingDefault));
+  }
+  for (const group of [
+    { source: "presets", label: "User library" },
+    { source: "factory", label: "Core Library" },
+  ]) {
+    const grouped = items.filter((item) => item.source === group.source);
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = group.label;
+    if (!grouped.length) {
+      const empty = kitFxOption("", group.source === "factory" ? "No Core Library presets" : "No user presets", false);
+      empty.disabled = true;
+      optgroup.append(empty);
+    } else {
+      for (const item of grouped) {
+        optgroup.append(kitFxOption(instrumentChoiceValue(item), item.name || item.label, instrumentChoiceValue(item) === current));
+      }
+    }
+    select.append(optgroup);
+  }
+  if (preset.instrument?.source === "upload" && instrumentTypeOf(preset.instrument) === type) {
+    select.append(kitFxOption("upload:", preset.instrument.name || "Uploaded instrument", true));
+  }
+  if (preset.instrument?.source === "upload") select.value = "upload:";
+  else if (usingDefault) select.value = defaultValue;
+  else select.value = current;
+  select.onchange = onchange;
+  syncSamplerSampleField();
+}
+
+function populatePresetSampleSelect(selected) {
+  const select = $("preset-sample");
+  if (!select) return;
+  const onchange = select.onchange;
+  select.onchange = null;
+  const current = selected ?? (preset.instrument?.sample || "");
+  select.innerHTML = "";
+  select.append(kitFxOption("", "Pick a sample…", !current));
+  for (const group of [
+    { section: "samples", label: "Samples" },
+    { section: "recordings", label: "Recordings" },
+  ]) {
+    const items = (preset.samples || []).filter((item) => item.section === group.section);
+    if (!items.length) continue;
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = group.label;
+    for (const item of items) {
+      optgroup.append(kitFxOption(item.value, item.label || item.name, item.value === current));
+    }
+    select.append(optgroup);
+  }
+  if (current && ![...select.options].some((option) => option.value === current)) {
+    select.append(kitFxOption(current, current.split(":").slice(1).join(":") || current, true));
+  }
+  select.value = current || "";
+  select.onchange = onchange;
+}
+
+async function populatePresetInstrumentSelect() {
+  await loadPresetInstrumentCatalog();
+  await loadPresetSampleCatalog();
+  populateInstrumentKindSelect();
+  populateInstrumentPresetSelect();
+  populatePresetSampleSelect();
+}
+
+function updatePresetHint(message) {
+  const hint = $("preset-hint");
+  if (hint) hint.textContent = message || "";
+}
+
+function applyLoadedInstrument(data) {
+  preset.instrument = {
+    name: data.name,
+    kind: data.kind,
+    source: data.source,
+    path: data.path || "",
+    device: data.instrument,
+    sample: data.sample || "",
+  };
+  const nameField = $("preset-name");
+  const currentName = nameField?.value || "";
+  if (data.name && (!currentName || currentName === "My Preset")) nameField.value = data.name;
+  populatePresetSampleSelect(preset.instrument.sample);
+  syncSamplerSampleField();
+  updatePresetHint();
+}
+
+function applyDefaultInstrument(kind, variant) {
+  const family = PRESET_INSTRUMENT_FAMILIES.find((item) => item.kind === kind);
+  const kit = kind === "drumRack" ? DRUM_KIT_PRESETS.find((item) => item.variant === (variant || "drum")) : null;
+  preset.instrument = {
+    name: kit?.name || family?.name || kind,
+    kind,
+    source: "default",
+    path: "",
+    variant: kit ? (variant || "drum") : "",
+    device: null,
+    sample: isSamplerKind(kind) ? ($("preset-sample")?.value || "") : "",
+  };
+  syncSamplerSampleField();
+  updatePresetHint();
+}
+
+async function loadPresetInstrumentChoice(value) {
+  if (!value) {
+    preset.instrument = null;
+    syncSamplerSampleField();
+    updatePresetHint();
+    return;
+  }
+  if (value === "upload:") return;
+  if (value.startsWith("default:")) {
+    const rest = value.slice("default:".length);
+    const split = rest.indexOf(":");
+    const kind = split === -1 ? rest : rest.slice(0, split);
+    const variant = split === -1 ? "" : rest.slice(split + 1);
+    applyDefaultInstrument(kind, variant);
+    return;
+  }
+  const split = value.indexOf(":");
+  const data = await api(`/api/presets/load?source=${encodeURIComponent(value.slice(0, split))}&path=${encodeURIComponent(value.slice(split + 1))}`);
+  applyLoadedInstrument(data);
+}
+
+async function showPresetDialog({ name, path, folder, instrument, slot1, slot2, title }) {
+  preset.editPath = path || "";
+  preset.editFolder = folder || "";
+  preset.instrument = instrument || null;
+  preset.uploads = { slot1: null, slot2: null };
+  $("preset-title").textContent = title || (preset.editPath ? "Edit preset" : "Make preset");
+  $("preset-name").value = name || "My Preset";
+  $("preset-save").textContent = preset.editPath ? "Save changes" : "Save to Move";
+  await fillPresetFxSelects(slot1 || "", slot2 || "");
+  await populatePresetInstrumentSelect();
+  updatePresetHint();
+  $("preset").showModal();
+}
+
+function resetPresetEditor() {
+  preset.instrument = null;
+  preset.uploads = { slot1: null, slot2: null };
+  preset.editPath = "";
+  preset.editFolder = "";
+  $("preset-save").textContent = "Save to Move";
+}
+
+function slotPayload(slot) {
+  const value = $(`preset-slot${slot}`)?.value || "";
+  const uploaded = preset.uploads[`slot${slot}`];
+  if (value === "upload:" && uploaded?.device) {
+    return { source: "upload", device: uploaded.device };
+  }
+  return value;
+}
+
+function applyUploadedEffects(data) {
+  const devices = (data.devices || []).slice(0, 2);
+  if (!devices.length) throw new Error("No effects in that file");
+  const slot1On = Boolean($("preset-slot1-kind")?.value);
+  const slot2On = Boolean($("preset-slot2-kind")?.value);
+  let start = 1;
+  if (devices.length === 1 && slot1On && !slot2On) start = 2;
+  devices.forEach((item, index) => {
+    const slot = start + index;
+    if (slot > 2) return;
+    preset.uploads[`slot${slot}`] = item;
+    populatePresetFxKindSelect($(`preset-slot${slot}-kind`), item.kind);
+    populatePresetFxSelect($(`preset-slot${slot}`), item.kind, "upload:");
+  });
+  const names = devices.map((item) => item.name || item.kind).join(" + ");
+  updatePresetHint();
+  toast(`Loaded ${names}`, "ok");
+}
+
+function presetPayload(output) {
+  const kind = $("preset-instrument-kind")?.value || preset.instrument?.kind || "";
+  const sample = isSamplerKind(kind) ? ($("preset-sample")?.value || "") : "";
+  return {
+    name: $("preset-name").value.trim(),
+    folder: preset.editPath ? preset.editFolder : (state.kind === "presets" ? destFolder() : ""),
+    replace: preset.editPath || "",
+    output,
+    slot1: slotPayload(1),
+    slot2: slotPayload(2),
+    instrument: preset.instrument?.source === "upload"
+      ? { source: "upload", path: "", kind, preset: preset.instrument.device, sample }
+      : {
+          source: preset.instrument?.source || "presets",
+          path: preset.instrument?.path || "",
+          kind,
+          preset: null,
+          sample,
+          variant: preset.instrument?.variant || "",
+        },
+  };
+}
+
+async function savePreset(output) {
+  const payload = presetPayload(output);
+  if (!payload.name) {
+    $("preset-hint").textContent = "Give the preset a name first";
+    return;
+  }
+  if (!preset.instrument) {
+    $("preset-hint").textContent = "Pick an instrument first";
+    return;
+  }
+  if (isSamplerKind(preset.instrument.kind) && preset.instrument.source === "default" && !$("preset-sample")?.value) {
+    $("preset-hint").textContent = "Pick a sample for Sampler";
+    return;
+  }
+  if (output === "file") {
+    try {
+      const response = await fetch("/api/presets/build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${payload.name}.ablpreset`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      $("preset").close();
+      toast("Preset downloaded", "ok");
+    } catch (error) {
+      $("preset-hint").textContent = error.message;
+    }
+    return;
+  }
+  try {
+    const result = await apiJson("/api/presets/build", payload);
+    $("preset").close();
+    toast(`Saved ${result.name}`, "ok");
+    if (!result.refreshed) {
+      toast("Saved, but library refresh failed — restart Move to see it", "error");
+    }
+    if (state.kind === "presets") await load();
+    refreshStorage();
+  } catch (error) {
+    $("preset-hint").textContent = error.message;
+  }
+}
+
 async function openPresetBuilder() {
   try {
-    await showFxDialog({
-      mode: "preset",
+    await showPresetDialog({
       name: "My Preset",
-      devices: [],
-      macros: [],
       path: "",
       folder: destFolder(),
       instrument: null,
+      slot1: "",
+      slot2: "",
+      title: "Make preset",
     });
   } catch (error) {
     toast(error.message, "error");
@@ -4462,14 +5256,9 @@ async function openPresetBuilder() {
 
 async function openPresetEditor(path) {
   try {
-    await ensureFxCatalog();
-    await ensureInstrumentCatalog();
     const data = await api(`/api/presets/load?source=presets&path=${encodeURIComponent(path)}`);
-    await showFxDialog({
-      mode: "preset",
+    await showPresetDialog({
       name: data.name,
-      devices: data.effects || [],
-      macros: data.macros || [],
       path: data.path || path,
       folder: data.folder || "",
       instrument: {
@@ -4478,23 +5267,197 @@ async function openPresetEditor(path) {
         source: data.source,
         path: data.path || path,
         device: data.instrument,
-        parameters: { ...(data.parameters || {}) },
+        sample: data.sample || "",
       },
+      slot1: data.slot1 || "",
+      slot2: data.slot2 || "",
+      title: "Edit preset",
     });
   } catch (error) {
     toast(error.message, "error");
   }
 }
 
-$("btn-fx").onclick = openFxBuilder;
-$("btn-fx-edit").onclick = () => {
-  const [path] = [...state.selected];
-  if (path) openFxEditor(path);
-};
+function closeDownMenus() {
+  document.querySelectorAll(".drop.open").forEach((el) => el.classList.remove("open"));
+  document.querySelectorAll(".drop-menu").forEach((el) => el.remove());
+  closeConnMenu();
+}
+
+function downMenuLabel(select) {
+  return select.selectedOptions[0]?.textContent || "—";
+}
+
+function syncDownSelect(select) {
+  const wrap = select.closest(".drop");
+  const btn = wrap?.querySelector(".drop-toggle");
+  if (!btn) return;
+  btn.textContent = downMenuLabel(select);
+  btn.disabled = select.disabled;
+  wrap.classList.toggle("disabled", select.disabled);
+}
+
+function openDownMenu(select, btn) {
+  const wrap = select.closest(".drop");
+  wrap.classList.add("open");
+  const menu = document.createElement("div");
+  menu.className = "drop-menu";
+  for (const node of select.children) {
+    if (node.tagName === "OPTGROUP") {
+      const group = document.createElement("div");
+      group.className = "drop-group";
+      group.textContent = node.label;
+      menu.append(group);
+      for (const opt of node.children) menu.append(downMenuItem(select, opt));
+    } else if (node.tagName === "OPTION") {
+      menu.append(downMenuItem(select, node));
+    }
+  }
+  (select.closest("dialog") || document.body).append(menu);
+  const box = btn.getBoundingClientRect();
+  menu.style.top = `${Math.round(box.bottom + 4)}px`;
+  menu.style.left = `${Math.round(box.left)}px`;
+  menu.style.width = `${Math.round(box.width)}px`;
+  menu.style.maxHeight = `${Math.max(8, window.innerHeight - box.bottom - 8)}px`;
+}
+
+function downMenuItem(select, opt) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = `drop-item${opt.selected ? " on" : ""}${opt.disabled ? " off" : ""}`;
+  item.textContent = opt.textContent;
+  item.disabled = opt.disabled;
+  if (!opt.disabled) {
+    item.onclick = () => {
+      select.value = opt.value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      closeDownMenus();
+    };
+  }
+  return item;
+}
+
+function bindDownSelect(select) {
+  if (select.closest(".drop")) return;
+  const wrap = document.createElement("div");
+  wrap.className = "drop";
+  select.after(wrap);
+  wrap.append(select);
+  select.classList.add("drop-native");
+  select.tabIndex = -1;
+  select.setAttribute("aria-hidden", "true");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "drop-toggle";
+  wrap.insertBefore(btn, select);
+  select.addEventListener("change", () => syncDownSelect(select));
+  new MutationObserver(() => syncDownSelect(select)).observe(select, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["disabled"],
+  });
+  syncDownSelect(select);
+  btn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (select.disabled) return;
+    const open = wrap.classList.contains("open");
+    closeDownMenus();
+    if (!open) openDownMenu(select, btn);
+  });
+}
+
+document.querySelectorAll("#preset select").forEach(bindDownSelect);
+document.addEventListener("pointerdown", (event) => {
+  if (!event.target.closest(".drop, .drop-menu")) closeDownMenus();
+});
+window.addEventListener("resize", closeDownMenus);
+$("preset").addEventListener("cancel", (event) => {
+  if (!document.querySelector(".drop-menu")) return;
+  event.preventDefault();
+  closeDownMenus();
+});
+$("preset").addEventListener("close", closeDownMenus);
+
 $("btn-preset").onclick = openPresetBuilder;
 $("btn-preset-edit").onclick = () => {
   const [path] = [...state.selected];
   if (path) openPresetEditor(path);
+};
+$("preset-instrument-kind").onchange = () => {
+  const type = $("preset-instrument-kind").value;
+  if (!type) {
+    preset.instrument = null;
+    populateInstrumentPresetSelect();
+    updatePresetHint();
+    return;
+  }
+  if (isEngineType(type)) {
+    if (instrumentTypeOf(preset.instrument) !== type) applyDefaultInstrument(type);
+  } else if (instrumentTypeOf(preset.instrument) !== type) {
+    preset.instrument = null;
+    updatePresetHint();
+  }
+  populateInstrumentPresetSelect();
+};
+$("preset-instrument").onchange = async () => {
+  try {
+    await loadPresetInstrumentChoice($("preset-instrument").value);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+};
+$("preset-slot1-kind").onchange = () => {
+  const kind = $("preset-slot1-kind").value;
+  if (preset.uploads.slot1 && preset.uploads.slot1.kind !== kind) preset.uploads.slot1 = null;
+  populatePresetFxSelect($("preset-slot1"), kind, preset.uploads.slot1 ? "upload:" : kind);
+};
+$("preset-slot2-kind").onchange = () => {
+  const kind = $("preset-slot2-kind").value;
+  if (preset.uploads.slot2 && preset.uploads.slot2.kind !== kind) preset.uploads.slot2 = null;
+  populatePresetFxSelect($("preset-slot2"), kind, preset.uploads.slot2 ? "upload:" : kind);
+};
+$("preset-instrument-upload").onclick = () => $("preset-instrument-file").click();
+$("preset-instrument-file").onchange = async () => {
+  const file = $("preset-instrument-file").files?.[0];
+  $("preset-instrument-file").value = "";
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const data = await apiJson("/api/presets/parse", { preset: JSON.parse(text) });
+    applyLoadedInstrument(data);
+    await populatePresetInstrumentSelect();
+  } catch (error) {
+    toast(error.message || "Could not read that preset", "error");
+  }
+};
+$("preset-effects-upload").onclick = () => $("preset-effects-file").click();
+$("preset-effects-file").onchange = async () => {
+  const file = $("preset-effects-file").files?.[0];
+  $("preset-effects-file").value = "";
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const data = await apiJson("/api/effects/parse", { preset: JSON.parse(text) });
+    applyUploadedEffects(data);
+  } catch (error) {
+    toast(error.message || "Could not read that effect", "error");
+  }
+};
+$("preset-cancel").onclick = () => {
+  resetPresetEditor();
+  $("preset").close();
+};
+$("preset").addEventListener("close", resetPresetEditor);
+$("preset-save").onclick = () => savePreset("device");
+$("preset-download").onclick = () => savePreset("file");
+
+if ($("fx")) {
+$("btn-fx").onclick = openFxBuilder;
+$("btn-fx-edit").onclick = () => {
+  const [path] = [...state.selected];
+  if (path) openFxEditor(path);
 };
 $("fx-instrument-select").onchange = async () => {
   try {
@@ -4541,6 +5504,7 @@ $("fx").addEventListener("cancel", (event) => {
   updateFxHint();
 });
 $("fx-macros-fill").onclick = fillFxMacrosFromChain;
+}
 
 function fxBuildUrl() {
   return fx.mode === "preset" ? "/api/presets/build" : "/api/effects/build";
@@ -4553,7 +5517,7 @@ function fxValidatePayload(payload) {
   return "";
 }
 
-$("fx-save").onclick = async () => {
+if ($("fx-save")) $("fx-save").onclick = async () => {
   const payload = fxPayload("device");
   const problem = fxValidatePayload(payload);
   if (problem) {
@@ -4574,7 +5538,7 @@ $("fx-save").onclick = async () => {
   }
 };
 
-$("fx-download").onclick = async () => {
+if ($("fx-download")) $("fx-download").onclick = async () => {
   const payload = fxPayload("file");
   const problem = fxValidatePayload(payload);
   if (problem) {

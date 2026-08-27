@@ -91,18 +91,75 @@ body {
   width: auto;
 }
 
-.conn {
+.conn-drop { flex-shrink: 0; }
+button.conn {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 12px 5px 10px;
+  margin: 0;
+  padding: 5px 22px 5px 10px;
   background: #141414;
   border: 1px solid var(--line);
   border-radius: var(--pill);
   color: var(--dim);
+  font: inherit;
   font-size: 12px;
   font-weight: 500;
-  flex-shrink: 0;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+button.conn:hover:not(:disabled) {
+  background: #1a1a1a;
+  border-color: #3a3a3a;
+  color: var(--text);
+}
+.conn-drop.open button.conn,
+.conn-drop.open button.conn:hover:not(:disabled) {
+  border-color: var(--cyan-edge);
+  box-shadow: var(--ring);
+}
+.conn::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  width: 0;
+  height: 0;
+  margin-top: -1px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--dim);
+}
+.conn-menu {
+  min-width: 240px;
+  padding: 6px 0;
+}
+button.drop-item.conn-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  white-space: normal;
+}
+.conn-choice .dot { margin-top: 5px; flex-shrink: 0; }
+.conn-choice-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.conn-choice-copy strong {
+  font-size: 13px;
+  font-weight: 550;
+  color: inherit;
+}
+.conn-choice-copy small {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 450;
 }
 
 .dot {
@@ -1019,8 +1076,227 @@ dialog input, dialog select {
 }
 dialog input::placeholder { color: #6e5d68; }
 dialog input:focus, dialog select:focus { outline: none; border-color: var(--cyan-edge); box-shadow: var(--ring); }
+dialog select:disabled {
+  opacity: .45;
+  cursor: default;
+}
 
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; padding: 0; }
+
+#preset[open],
+#preset:modal {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  inset: unset;
+  top: max(24px, calc(50vh - 210px));
+  left: 0;
+  right: 0;
+  transform: none;
+  width: min(880px, calc(100vw - 32px));
+  height: auto;
+  max-width: none;
+  max-height: calc(100vh - max(48px, calc(50vh - 186px)));
+  overflow: visible;
+  margin: 0 auto;
+  padding: 0 22px 10px;
+}
+#preset .studio-top {
+  flex: none;
+  align-items: flex-end;
+  gap: 12px 20px;
+  margin: 0 -22px 14px;
+  padding: 16px 22px 14px;
+}
+#preset .preset-name-field {
+  flex: 0 1 240px;
+  margin-bottom: 0;
+}
+#preset .studio-foot {
+  flex: none;
+  margin: 12px -22px 0;
+  padding: 10px 22px 4px;
+}
+#preset .hint { min-height: 0; }
+.preset-slots {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.preset-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 14px 14px 16px;
+  background: #141414;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.preset-card.instrument { box-shadow: inset 3px 0 0 var(--amber); }
+.preset-card.effect { box-shadow: inset 3px 0 0 var(--cyan); }
+.preset-card header { min-width: 0; }
+.preset-card .kicker { margin-bottom: 2px; }
+.preset-card h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  text-transform: none;
+}
+.preset-card label {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.preset-card select {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 450;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.preset-card optgroup {
+  font-style: normal;
+  color: var(--faint);
+  background: var(--surface);
+}
+.preset-card optgroup option { color: var(--text); }
+#preset-sample-field[hidden] { display: none; }
+
+.drop { position: relative; min-width: 0; }
+.drop-native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0;
+  appearance: none;
+  pointer-events: none;
+}
+button.drop-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 8px 28px 8px 10px;
+  overflow: hidden;
+  background: #141414;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 450;
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+button.drop-toggle:hover:not(:disabled) {
+  background: #181818;
+  border-color: #3a3a3a;
+}
+.drop-toggle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 0;
+  height: 0;
+  margin-top: -2px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--dim);
+}
+.drop.open button.drop-toggle,
+.drop.open button.drop-toggle:hover:not(:disabled) {
+  border-color: var(--cyan-edge);
+  box-shadow: var(--ring);
+}
+.drop.disabled .drop-toggle {
+  opacity: .45;
+  cursor: default;
+}
+.drop-menu {
+  position: fixed;
+  z-index: 80;
+  overflow: auto;
+  padding: 6px 2px 6px 0;
+  background: #161616;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  color-scheme: dark;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 229, 255, .42) #0c0c0c;
+}
+.drop-menu::-webkit-scrollbar {
+  width: 8px;
+}
+.drop-menu::-webkit-scrollbar-corner {
+  background: #0c0c0c;
+}
+.drop-menu::-webkit-scrollbar-track {
+  background: #0c0c0c;
+  border-radius: 0 7px 7px 0;
+}
+.drop-menu::-webkit-scrollbar-thumb {
+  background: rgba(0, 229, 255, .42);
+  border: 2px solid #0c0c0c;
+  border-radius: 8px;
+}
+.drop-menu::-webkit-scrollbar-thumb:hover {
+  background: var(--cyan);
+}
+.drop-group {
+  padding: 8px 12px 4px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+button.drop-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 7px 12px;
+  overflow: hidden;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 450;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+button.drop-item:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: transparent;
+}
+button.drop-item.on { color: var(--cyan); }
+button.drop-item.off,
+button.drop-item:disabled {
+  opacity: .4;
+  cursor: default;
+}
 
 .hint { color: var(--faint); font-size: 11.5px; min-height: 1.2em; margin: 0; }
 .hint.error { color: #ff9a9a; }
