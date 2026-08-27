@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Move My Ass</title>
 <link rel="icon" href="/static/logo.png?v=glitch3">
-<link rel="stylesheet" href="/static/style.css?v=liveui7">
+<link rel="stylesheet" href="/static/style.css?v=liveui8">
 </head>
 <body>
 <header class="topbar">
@@ -154,48 +154,35 @@
   <div class="studio-top">
     <div class="kit-meta">
       <label>Kit name <input id="kit-name" placeholder="My Kit"></label>
-      <label>Type
-        <select id="kit-type">
-          <option value="drum">Drum — one shot, pads ring out</option>
-          <option value="choke">Choke — pads cut each other off</option>
-          <option value="gate">Gate — sustains while held</option>
-        </select>
+      <div class="kit-field">
+        <span class="kit-field-label" id="kit-type-label">Type</span>
+        <div class="kit-type" role="radiogroup" aria-labelledby="kit-type-label">
+          <button type="button" class="kit-type-btn on" data-type="drum" aria-pressed="true" title="One shot, pads ring out">Drum</button>
+          <button type="button" class="kit-type-btn" data-type="choke" aria-pressed="false" title="Pads cut each other off">Choke</button>
+          <button type="button" class="kit-type-btn" data-type="gate" aria-pressed="false" title="Sustains while held">Gate</button>
+        </div>
+      </div>
+      <label class="kit-fx">Return FX
+        <span class="kit-fx-pair">
+          <select id="kit-return-fx" aria-label="Return FX type">
+            <option value="">Off</option>
+            <option value="reverb" selected>Reverb</option>
+          </select>
+          <select id="kit-return-fx-preset" aria-label="Return FX preset">
+            <option value="reverb">Default</option>
+          </select>
+        </span>
       </label>
-      <label>Return FX
-        <select id="kit-return-fx">
-          <option value="">Off</option>
-          <option value="reverb" selected>Reverb</option>
-          <option value="delay">Delay</option>
-          <option value="autoFilter">Auto Filter</option>
-          <option value="chorus">Chorus-Ensemble</option>
-          <option value="phaser">Phaser-Flanger</option>
-          <option value="autoPan">Auto Pan</option>
-          <option value="autoShift">Auto Shift</option>
-          <option value="erosion">Erosion</option>
-          <option value="saturator">Saturator</option>
-          <option value="channelEq">Channel EQ</option>
-          <option value="compressor">Compressor</option>
-          <option value="limiter">Limiter</option>
-          <option value="redux2">Redux</option>
-        </select>
-      </label>
-      <label>Insert FX
-        <select id="kit-insert-fx">
-          <option value="">Off</option>
-          <option value="reverb">Reverb</option>
-          <option value="delay">Delay</option>
-          <option value="autoFilter">Auto Filter</option>
-          <option value="chorus">Chorus-Ensemble</option>
-          <option value="phaser">Phaser-Flanger</option>
-          <option value="autoPan">Auto Pan</option>
-          <option value="autoShift">Auto Shift</option>
-          <option value="erosion">Erosion</option>
-          <option value="saturator" selected>Saturator</option>
-          <option value="channelEq">Channel EQ</option>
-          <option value="compressor">Compressor</option>
-          <option value="limiter">Limiter</option>
-          <option value="redux2">Redux</option>
-        </select>
+      <label class="kit-fx">Insert FX
+        <span class="kit-fx-pair">
+          <select id="kit-insert-fx" aria-label="Insert FX type">
+            <option value="">Off</option>
+            <option value="saturator" selected>Saturator</option>
+          </select>
+          <select id="kit-insert-fx-preset" aria-label="Insert FX preset">
+            <option value="saturator">Default</option>
+          </select>
+        </span>
       </label>
     </div>
   </div>
@@ -267,6 +254,6 @@
 
 <div id="toasts"></div>
 <script src="/static/fx-viz.js?v=liveui7"></script>
-<script src="/static/app.js?v=liveui7"></script>
+<script src="/static/app.js?v=liveui8"></script>
 </body>
 </html>

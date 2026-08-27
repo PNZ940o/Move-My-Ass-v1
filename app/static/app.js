@@ -1982,7 +1982,7 @@ $("btn-download").onclick = async () => {
 
 /* ---------- kit builder ---------- */
 
-const kit = { mode: "pads", folder: "", section: "samples", available: [], pads: [], sample: null, duration: 0, slices: [], peaks: [], hiPeaks: [] };
+const kit = { mode: "pads", folder: "", section: "samples", available: [], pads: [], sample: null, duration: 0, slices: [], peaks: [], hiPeaks: [], fxPresets: [] };
 
 const KIT_PAD_KEYS = ["z", "x", "c", "v", "a", "s", "d", "f", "q", "w", "e", "r", "1", "2", "3", "4"];
 const KIT_KEY_INDEX = Object.fromEntries(KIT_PAD_KEYS.map((key, index) => [key, index]));
@@ -2754,8 +2754,8 @@ function kitFxOption(value, label, selected) {
   return option;
 }
 
-function populateKitFxSelect(select, selected, presets) {
-  const specs = fx.catalog && fx.catalog.length
+function kitFxSpecs() {
+  return fx.catalog && fx.catalog.length
     ? fx.catalog
     : [
         { kind: "reverb", name: "Reverb" },
@@ -2772,28 +2772,97 @@ function populateKitFxSelect(select, selected, presets) {
         { kind: "limiter", name: "Limiter" },
         { kind: "redux2", name: "Redux" },
       ];
+}
+
+function kitFxName(kind) {
+  return (kitFxSpecs().find((item) => item.kind === kind) || {}).name || kind;
+}
+
+function kitFxPresetValue(item) {
+  if (item.source === "factory") return "factory:" + item.path;
+  return "preset:" + item.path;
+}
+
+function kitFxKindFromValue(value) {
+  if (!value) return "";
+  if (!String(value).startsWith("preset:") && !String(value).startsWith("factory:")) return value;
+  const item = (kit.fxPresets || []).find((entry) => kitFxPresetValue(entry) === value);
+  return item?.kind || "";
+}
+
+function kitType() {
+  return document.querySelector(".kit-type-btn.on")?.dataset.type || "drum";
+}
+
+function setKitType(value) {
+  const type = value || "drum";
+  for (const btn of document.querySelectorAll(".kit-type-btn")) {
+    const on = btn.dataset.type === type;
+    btn.classList.toggle("on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  }
+}
+
+function kitFxValue(slot) {
+  const kind = $(`kit-${slot}-fx`)?.value || "";
+  if (!kind) return "";
+  return $(`kit-${slot}-fx-preset`)?.value || kind;
+}
+
+function populateKitFxKindSelect(select, selected) {
+  if (!select) return;
+  const onchange = select.onchange;
+  select.onchange = null;
   select.innerHTML = "";
-  select.append(kitFxOption("", "Off", selected === ""));
-  const devices = document.createElement("optgroup");
-  devices.label = "Devices";
-  for (const spec of specs) {
-    devices.append(kitFxOption(spec.kind, spec.name, spec.kind === selected));
+  select.append(kitFxOption("", "Off", !selected));
+  for (const spec of kitFxSpecs()) {
+    select.append(kitFxOption(spec.kind, spec.name, spec.kind === selected));
   }
-  select.append(devices);
-  const presetsGroup = document.createElement("optgroup");
-  presetsGroup.label = "Presets";
-  if (presets.length) {
-    for (const preset of presets) {
-      const value = "preset:" + preset.path;
-      presetsGroup.append(kitFxOption(value, preset.label || preset.name, value === selected));
+  if (selected && ![...select.options].some((option) => option.value === selected)) {
+    select.append(kitFxOption(selected, selected, true));
+  }
+  select.value = selected || "";
+  select.onchange = onchange;
+}
+
+function populateKitFxPresetSelect(select, kind, selected) {
+  if (!select) return;
+  const onchange = select.onchange;
+  select.onchange = null;
+  select.innerHTML = "";
+  if (!kind) {
+    select.append(kitFxOption("", "Off", true));
+    select.disabled = true;
+    select.onchange = onchange;
+    return;
+  }
+  select.disabled = false;
+  select.append(kitFxOption(kind, `Default (${kitFxName(kind)})`, selected === kind || !selected));
+  const matching = (kit.fxPresets || []).filter((item) => item.kind === kind);
+  function appendGroup(label, items) {
+    if (!items.length) return;
+    const group = document.createElement("optgroup");
+    group.label = label;
+    for (const item of items) {
+      group.append(kitFxOption(kitFxPresetValue(item), item.name || item.label, kitFxPresetValue(item) === selected));
     }
-  } else {
-    const empty = kitFxOption("", "No saved presets", false);
-    empty.disabled = true;
-    presetsGroup.append(empty);
+    select.append(group);
   }
-  select.append(presetsGroup);
-  select.value = selected;
+  appendGroup("User library", matching.filter((item) => (item.source || "effects") === "effects"));
+  appendGroup("Core Library", matching.filter((item) => item.source === "factory"));
+  select.value = selected || kind;
+  select.onchange = onchange;
+}
+
+function applyKitFxSlot(slot, value) {
+  const kind = kitFxKindFromValue(value);
+  populateKitFxKindSelect($(`kit-${slot}-fx`), kind);
+  populateKitFxPresetSelect($(`kit-${slot}-fx-preset`), kind, value || kind);
+}
+
+function syncKitFxPreset(slot) {
+  const kind = $(`kit-${slot}-fx`)?.value || "";
+  populateKitFxPresetSelect($(`kit-${slot}-fx-preset`), kind, kind);
 }
 
 async function fillKitFxSelects() {
@@ -2802,15 +2871,14 @@ async function fillKitFxSelects() {
   } catch (error) {
     if (!fx.catalog) toast(error.message, "error");
   }
-  let presets = [];
   try {
     const data = await api("/api/effects/presets");
-    presets = data.presets || [];
+    kit.fxPresets = data.presets || [];
   } catch {
-    presets = [];
+    kit.fxPresets = [];
   }
-  populateKitFxSelect($("kit-return-fx"), "reverb", presets);
-  populateKitFxSelect($("kit-insert-fx"), "saturator", presets);
+  applyKitFxSlot("return", "reverb");
+  applyKitFxSlot("insert", "saturator");
 }
 
 async function openKitFromFolder() {
@@ -2836,6 +2904,7 @@ async function openKitFromFolder() {
     kit.peaks = [];
     resetKitAudio();
     resetSliceView();
+    setKitType("drum");
     const first = plan.pads.findIndex((pad) => pad.sample);
     if (first >= 0) kitAudio.selected = first;
     await fillKitFxSelects();
@@ -2894,6 +2963,7 @@ async function openKitFromSample() {
   $("kit-hint").textContent = "";
   resetKitAudio();
   resetSliceView();
+  setKitType("drum");
   await fillKitFxSelects();
   await loadSlicePlan();
   $("kit").showModal();
@@ -2937,9 +3007,9 @@ document.addEventListener("keydown", (event) => {
 function kitPayload(output) {
   return {
     name: $("kit-name").value.trim(),
-    kit_type: $("kit-type").value,
-    return_effect: $("kit-return-fx").value,
-    insert_effect: $("kit-insert-fx").value,
+    kit_type: kitType(),
+    return_effect: kitFxValue("return"),
+    insert_effect: kitFxValue("insert"),
     mode: kit.mode,
     folder: kit.folder,
     pads: kit.mode === "pads" ? kit.pads.map((p) => p.sample) : [],
@@ -2966,9 +3036,23 @@ function bindSelectUndo(id, kind) {
   });
 }
 
-bindSelectUndo("kit-type", "kit");
 bindSelectUndo("kit-return-fx", "kit");
+bindSelectUndo("kit-return-fx-preset", "kit");
 bindSelectUndo("kit-insert-fx", "kit");
+bindSelectUndo("kit-insert-fx-preset", "kit");
+$("kit-return-fx").addEventListener("change", () => syncKitFxPreset("return"));
+$("kit-insert-fx").addEventListener("change", () => syncKitFxPreset("insert"));
+for (const btn of document.querySelectorAll(".kit-type-btn")) {
+  let before = null;
+  btn.addEventListener("pointerdown", () => {
+    before = JSON.stringify(snapshotKit());
+  });
+  btn.addEventListener("click", () => {
+    setKitType(btn.dataset.type);
+    if (before) commitEditorDiff("kit", before);
+    before = JSON.stringify(snapshotKit());
+  });
+}
 $("kit-name").addEventListener("focus", () => {
   editorUndo.fieldStart = JSON.stringify(snapshotKit());
 });
@@ -3054,9 +3138,9 @@ function snapshotKit() {
       length_seconds: slice.length_seconds,
     })),
     name: $("kit-name")?.value || "",
-    type: $("kit-type")?.value || "",
-    returnFx: $("kit-return-fx")?.value || "",
-    insertFx: $("kit-insert-fx")?.value || "",
+    type: kitType(),
+    returnFx: kitFxValue("return"),
+    insertFx: kitFxValue("insert"),
     sliceCount: $("kit-slices")?.value || "",
     selected: kitAudio.selected,
   };
@@ -3070,9 +3154,9 @@ function applyKitSnapshot(data) {
   }));
   kit.slices = (data.slices || []).map((slice) => ({ ...slice }));
   if ($("kit-name")) $("kit-name").value = data.name || "";
-  if ($("kit-type") && data.type) $("kit-type").value = data.type;
-  if ($("kit-return-fx")) $("kit-return-fx").value = data.returnFx || "";
-  if ($("kit-insert-fx")) $("kit-insert-fx").value = data.insertFx || "";
+  setKitType(data.type);
+  applyKitFxSlot("return", data.returnFx || "");
+  applyKitFxSlot("insert", data.insertFx || "");
   if ($("kit-slices") && data.sliceCount != null && data.sliceCount !== "") {
     $("kit-slices").value = data.sliceCount;
     if ($("slice-count-label")) $("slice-count-label").textContent = data.sliceCount;
