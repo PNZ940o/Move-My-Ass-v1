@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from pathlib import Path
 
 from . import paths
@@ -137,6 +138,35 @@ def _local_usage(backend: LocalBackend) -> tuple[int, int, int, dict[str, int]]:
     total = MOCK_TOTAL if used < MOCK_TOTAL else used + 512 * 1024 * 1024
     free = max(0, total - used)
     return total, used, free, trees
+
+
+def tree_bytes(backend: MoveBackend, absolute: str) -> int:
+    """Byte size of one folder, via `du` on the device or a local walk in mock."""
+    if isinstance(backend, LocalBackend):
+        return _tree_bytes_local(backend, absolute)
+    result = backend.run(f"du -sk {shlex.quote(absolute)}", timeout=90.0)
+    if not result.ok:
+        raise StorageError((result.stderr or result.stdout or "du failed").strip())
+    match = re.match(r"^(\d+)\s+", result.stdout.strip())
+    if not match:
+        raise StorageError("could not read folder size")
+    return int(match.group(1)) * 1024
+
+
+def free_bytes(backend: MoveBackend) -> int | None:
+    """Free space on `/data`, or `None` if the device would not tell us."""
+    if isinstance(backend, LocalBackend):
+        try:
+            return usage(backend)["free"]
+        except StorageError:
+            return None
+    result = backend.run("df -Pk /data 2>/dev/null || df -Pk /data/UserData")
+    if not result.ok:
+        return None
+    try:
+        return parse_df(result.stdout)[2]
+    except StorageError:
+        return None
 
 
 def usage(backend: MoveBackend) -> dict:

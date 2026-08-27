@@ -70,7 +70,7 @@ def listing(backend: MoveBackend, kind: str, relative: str = "") -> dict:
 
     items.sort(key=_sort_key)
 
-    return {
+    payload = {
         "kind": kind,
         "path": relative.strip("/"),
         "absolute": absolute,
@@ -79,6 +79,9 @@ def listing(backend: MoveBackend, kind: str, relative: str = "") -> dict:
         "items": items,
         "total_bytes": sum(i["size"] for i in items),
     }
+    if at_sets_root:
+        payload["warnings"] = sets.listing_warnings(backend, meta)
+    return payload
 
 
 def copy_into_samples(backend: MoveBackend, kind: str, items: list[str], dest_folder: str = "Factory") -> tuple[list[str], list[dict]]:

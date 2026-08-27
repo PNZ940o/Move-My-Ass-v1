@@ -16,6 +16,12 @@ TRACK_PRESETS = f"{USER_LIBRARY}/Track Presets"
 SETS = f"{USER_LIBRARY}/Sets"
 AUDIO_EFFECTS = f"{USER_LIBRARY}/Audio Effects"
 
+# Pad copies are assembled here, then `mv`'d into Sets/. Same filesystem as
+# Sets/, so the rename is atomic. Move's Set Overview notices a finished
+# folder arriving; it often ignores a folder that appears as a duplicate of
+# an occupied pad and then has its index rewritten.
+INCOMING_SETS = "/data/UserData/.mma-incoming"
+
 LIBRARY_ROOTS: dict[str, str] = {
     "samples": SAMPLES,
     "recordings": RECORDINGS,

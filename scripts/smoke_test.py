@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
+import urllib.error
 import urllib.request
 import uuid
 import zipfile
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8000")
 failures: list[str] = []
 
 
@@ -128,9 +130,17 @@ check("mkdir created folder", "made" in [i["name"] for i in json.loads(raw)["ite
 
 # "New folder" has to work in every section, not just the one that happens to be
 # open first, and at a section root the browser sends a leading slash.
+# Sets root is UUID folders only — a loose folder there is not a pad set.
 SECTIONS = ["samples", "recordings", "presets", "sets", "effects"]
 for section in SECTIONS:
     folder = f"SmokeNew-{section}"
+    if section == "sets":
+        try:
+            call("POST", "/api/mkdir", {"kind": "sets", "path": f"/{folder}"})
+            check("mkdir at sets root is rejected", False, "request succeeded")
+        except urllib.error.HTTPError as exc:
+            check("mkdir at sets root is rejected", exc.code == 400, str(exc.code))
+        continue
     code, _ = call("POST", "/api/mkdir", {"kind": section, "path": f"/{folder}"})
     _, raw = call("GET", f"/api/list?kind={section}")
     listed = [i["name"] for i in json.loads(raw)["items"]]
