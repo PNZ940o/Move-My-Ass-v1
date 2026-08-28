@@ -694,12 +694,18 @@ class KitSliceRegion(BaseModel):
     length: float
 
 
+class KitPadSpec(BaseModel):
+    sample: str | None = None
+    start: float | None = None
+    length: float | None = None
+
+
 class KitBuildRequest(BaseModel):
     name: str
     kit_type: str = "drum"
     mode: str = "pads"
     folder: str = ""
-    pads: list[str | None] = []
+    pads: list[str | KitPadSpec | None] = []
     sample: str | None = None
     count: int = 16
     output: str = "device"
@@ -714,6 +720,29 @@ def _safe_filename(name: str) -> str:
     if not cleaned:
         raise HTTPException(status_code=400, detail="preset name is empty")
     return cleaned
+
+
+def _kit_pad_source(entry, folder: str) -> tuple[str, float | None, float | None]:
+    """Turn one client pad into (relative path, playback start, length)."""
+    if not entry:
+        return "", None, None
+    if isinstance(entry, str):
+        sample, start, length = entry, None, None
+    else:
+        sample, start, length = entry.sample, entry.start, entry.length
+    if not sample:
+        return "", None, None
+    relative = sample if "/" in sample else posixpath.join(folder, sample)
+    relative = relative.strip("/")
+    if start is None and length is None:
+        return relative, None, None
+    start_n = 0.0 if start is None else max(0.0, min(1.0, float(start)))
+    length_n = (
+        1.0 - start_n if length is None else max(0.0, min(1.0 - start_n, float(length)))
+    )
+    if start_n <= 1e-6 and length_n >= 1.0 - 1e-6:
+        return relative, None, None
+    return relative, start_n, length_n
 
 
 def _pad_sources(body: KitBuildRequest) -> list[tuple[str, float | None, float | None]]:
@@ -740,11 +769,9 @@ def _pad_sources(body: KitBuildRequest) -> list[tuple[str, float | None, float |
 
     sources: list[tuple[str, float | None, float | None]] = []
     for entry in body.pads[: kits.PAD_COUNT]:
-        if not entry:
-            sources.append(("", None, None))
-            continue
-        relative = entry if "/" in entry else posixpath.join(body.folder, entry)
-        sources.append((relative.strip("/"), None, None))
+        sources.append(_kit_pad_source(entry, body.folder))
+    while len(sources) < kits.PAD_COUNT:
+        sources.append(("", None, None))
     return sources
 
 
