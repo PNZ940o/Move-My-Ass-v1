@@ -6,14 +6,14 @@
   const FMIN = 20;
   const FMAX = 20000;
   const SR = 44100;
-  const CYAN = "#00e5ff";
-  const PINK = "#ff3df5";
-  const AMBER = "#ff8a4a";
-  const VIOLET = "#c9b8ff";
+  const CYAN = "#6ee8f4";
+  const PINK = "#f48ee8";
+  const AMBER = "#ffb07a";
+  const VIOLET = "#e2d8ff";
   const TEXT = "#f4eaf0";
   const DIM = "rgba(208, 188, 199, 0.55)";
   const GRID = "rgba(244, 234, 240, 0.08)";
-  const FILL = "rgba(0, 229, 255, 0.18)";
+  const FILL = "rgba(110, 232, 244, 0.16)";
 
   const FILTER_PARAMS = {
     drift: { freq: "Filter_Frequency", res: "Filter_Resonance", type: "Filter_Type" },
@@ -347,11 +347,11 @@
       ctx.lineTo(points[points.length - 1].x, fill);
       ctx.lineTo(points[0].x, fill);
       ctx.closePath();
-      ctx.fillStyle = color.replace(")", ", 0.16)").replace("rgb", "rgba").replace("#00e5ff", "rgba(0,229,255,0.16)").replace("#ff3df5", "rgba(255,61,245,0.14)").replace("#ff8a4a", "rgba(255,138,74,0.16)").replace("#c9b8ff", "rgba(201,184,255,0.16)");
+      ctx.fillStyle = color.replace(")", ", 0.16)").replace("rgb", "rgba").replace("#6ee8f4", "rgba(110,232,244,0.16)").replace("#f48ee8", "rgba(244,142,232,0.14)").replace("#ffb07a", "rgba(255,176,122,0.16)").replace("#e2d8ff", "rgba(226,216,255,0.16)");
       if (color === CYAN) ctx.fillStyle = FILL;
-      else if (color === PINK) ctx.fillStyle = "rgba(255,61,245,0.14)";
-      else if (color === AMBER) ctx.fillStyle = "rgba(255,138,74,0.16)";
-      else ctx.fillStyle = "rgba(201,184,255,0.14)";
+      else if (color === PINK) ctx.fillStyle = "rgba(244,142,232,0.14)";
+      else if (color === AMBER) ctx.fillStyle = "rgba(255,176,122,0.16)";
+      else ctx.fillStyle = "rgba(226,216,255,0.14)";
       ctx.fill();
     }
   }
@@ -422,11 +422,11 @@
     ctx.lineTo(w, zero);
     ctx.closePath();
     const grad = ctx.createLinearGradient(0, 0, w, 0);
-    grad.addColorStop(0, "rgba(255,138,74,0.42)");
-    grad.addColorStop(clamp(logx(220), 0, 1), "rgba(255,138,74,0.28)");
-    grad.addColorStop(clamp(logx(midF), 0, 1), "rgba(0,229,255,0.38)");
-    grad.addColorStop(clamp(logx(4500), 0, 1), "rgba(255,61,245,0.28)");
-    grad.addColorStop(1, "rgba(255,61,245,0.42)");
+    grad.addColorStop(0, "rgba(255,176,122,0.42)");
+    grad.addColorStop(clamp(logx(220), 0, 1), "rgba(255,176,122,0.28)");
+    grad.addColorStop(clamp(logx(midF), 0, 1), "rgba(110,232,244,0.38)");
+    grad.addColorStop(clamp(logx(4500), 0, 1), "rgba(244,142,232,0.28)");
+    grad.addColorStop(1, "rgba(244,142,232,0.42)");
     ctx.fillStyle = grad;
     ctx.fill();
 
@@ -649,7 +649,7 @@
     for (const pt of pts) ctx.lineTo(pt.x, pt.y);
     ctx.lineTo(w, h);
     ctx.closePath();
-    ctx.fillStyle = "rgba(0,229,255,0.16)";
+    ctx.fillStyle = "rgba(110,232,244,0.16)";
     ctx.fill();
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
@@ -744,7 +744,7 @@
     }
     ctx.globalAlpha = 1;
     if (p(item, "HighpassEnabled", false)) {
-      ctx.fillStyle = "rgba(255,138,74,0.35)";
+      ctx.fillStyle = "rgba(255,176,122,0.35)";
       ctx.fillRect(0, 0, logx(p(item, "HighpassFrequency", 20)) * w, 4);
     }
     labels(ctx, w, h, [
@@ -889,7 +889,7 @@
     ctx.fillRect(dryX, y0 - dry * (h * 0.55), 4, dry * (h * 0.55));
 
     const preX = (pre / span) * w;
-    ctx.fillStyle = "rgba(0,229,255,0.35)";
+    ctx.fillStyle = "rgba(110,232,244,0.35)";
     ctx.fillRect(preX, 8, 2, h - 16);
 
     const reflections = 7 + Math.round(size / 80);
@@ -915,7 +915,7 @@
     }
     ctx.lineTo(w, y0);
     ctx.closePath();
-    ctx.fillStyle = "rgba(255,61,245,0.18)";
+    ctx.fillStyle = "rgba(244,142,232,0.18)";
     ctx.fill();
     ctx.strokeStyle = PINK;
     ctx.lineWidth = 1.5;
@@ -955,7 +955,7 @@
     for (const pt of pts) ctx.lineTo(pt.x, pt.y);
     ctx.lineTo(w, zero);
     ctx.closePath();
-    ctx.fillStyle = "rgba(255,138,74,0.18)";
+    ctx.fillStyle = "rgba(255,176,122,0.18)";
     ctx.fill();
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
@@ -1046,7 +1046,7 @@
     ctx.stroke();
     if (lfo > 0.01) {
       const span = 2 ** (lfo * 2.5);
-      ctx.fillStyle = "rgba(255,61,245,0.12)";
+      ctx.fillStyle = "rgba(244,142,232,0.12)";
       const x0 = logx(f0 / span) * w;
       const x1 = logx(f0 * span) * w;
       ctx.fillRect(x0, 0, Math.max(2, x1 - x0), h);
@@ -1220,7 +1220,7 @@
       ctx.setLineDash([]);
     }
     if (snap > 0) {
-      ctx.fillStyle = "rgba(0,229,255,0.18)";
+      ctx.fillStyle = "rgba(110,232,244,0.18)";
       for (let st = lo; st <= hi; st += 1) {
         if (st % 12 === 0) continue;
         ctx.fillRect(w - 10 * snap, yAt(st) - 0.5, 10 * snap, 1);
@@ -1265,7 +1265,7 @@
     for (const pt of pts) ctx.lineTo(pt.x, pt.y);
     ctx.lineTo(w, h);
     ctx.closePath();
-    ctx.fillStyle = noise > 0.5 ? "rgba(255,138,74,0.16)" : FILL;
+    ctx.fillStyle = noise > 0.5 ? "rgba(255,176,122,0.16)" : FILL;
     ctx.fill();
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
@@ -1568,7 +1568,7 @@
     for (const pt of pts) ctx.lineTo(pt.x, pt.y);
     ctx.lineTo(w, zero);
     ctx.closePath();
-    ctx.fillStyle = "rgba(255,138,74,0.2)";
+    ctx.fillStyle = "rgba(255,176,122,0.2)";
     ctx.fill();
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);

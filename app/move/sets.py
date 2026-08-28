@@ -557,9 +557,13 @@ def copy_off_grid(backend: MoveBackend, uuid: str) -> dict:
     }
 
 
-def _first_empty_pad(meta_map: dict[str, SetMeta]) -> int | None:
+def _first_empty_pad(meta_map: dict[str, SetMeta], start_number: int = 1) -> int | None:
     occupied = _occupied_pads(meta_map)
-    for index in range(32):
+    start = 0
+    if isinstance(start_number, int) and 1 <= start_number <= 32:
+        start = start_number - 1
+    for offset in range(32):
+        index = (start + offset) % 32
         if index not in occupied:
             return index + 1
     return None
@@ -871,24 +875,36 @@ def import_uploads(
     pad_number: int | None = None,
     off_grid: bool = False,
 ) -> list[dict]:
-    """Import one or more PC-saved sets. Empty pads fill first; extras go off-grid."""
+    """Import one or more PC-saved sets. Empty pads fill first; extras go off-grid.
+
+    When pad_number is set, the first set lands on that pad and the rest fill
+    the following empty pads, wrapping from 32 back to 1.
+    """
     if not uploads:
         raise ValueError("nothing to import")
     groups = _split_set_groups(uploads)
     imported = []
+    cursor = None
     for index, (hint, tree) in enumerate(groups):
         this_off = off_grid
-        this_pad = None if (off_grid or index > 0) else pad_number
-        imported.append(
-            import_set(
-                backend,
-                tree,
-                name_hint=hint,
-                pad_number=this_pad,
-                off_grid=this_off,
-                refresh=False,
-            )
+        this_pad = None
+        if not this_off:
+            if index == 0:
+                this_pad = pad_number
+            elif cursor is not None:
+                this_pad = _first_empty_pad(collect(backend), cursor)
+                if this_pad is None:
+                    this_off = True
+        row = import_set(
+            backend,
+            tree,
+            name_hint=hint,
+            pad_number=this_pad,
+            off_grid=this_off,
+            refresh=False,
         )
+        imported.append(row)
+        cursor = (row["pad"] % 32) + 1 if row.get("pad") else None
     try:
         backend.refresh_library()
     except Exception:

@@ -622,8 +622,8 @@ function drawWaveform(canvas, peaks, options = {}) {
   const mid = height / 2;
   const gap = slice.length > width ? 0 : 0.35;
   const bar = Math.max(1, width / slice.length);
-  const played = options.played || "rgba(255, 61, 245, 0.95)";
-  const rest = options.color || "rgba(0, 229, 255, 0.82)";
+  const played = options.played || "rgba(244, 142, 232, 0.88)";
+  const rest = options.color || "rgba(110, 232, 244, 0.72)";
   const hiStart = options.highlightStart;
   const hiEnd = options.highlightEnd;
   const span = Math.max(1e-6, end - start);
@@ -671,7 +671,7 @@ function drawWaveform(canvas, peaks, options = {}) {
       const t = (bounds[i] - start) / span;
       if (t < -0.02 || t > 1.02) continue;
       const x = Math.round(Math.max(0, Math.min(width - 1, t * width)));
-      ctx.fillStyle = i === active ? "rgba(255, 61, 245, 0.95)" : "rgba(255, 61, 245, 0.72)";
+      ctx.fillStyle = i === active ? "rgba(244, 142, 232, 0.9)" : "rgba(244, 142, 232, 0.62)";
       ctx.fillRect(x - 1, 0, 2, height);
       ctx.fillRect(Math.max(0, x - 4), 0, 8, 7);
       ctx.fillRect(Math.max(0, x - 4), height - 7, 8, 7);

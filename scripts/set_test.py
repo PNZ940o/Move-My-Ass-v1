@@ -259,6 +259,27 @@ check(
 
 listing = get("/api/list?kind=sets")
 used = {row["pad"] for row in listing["items"] if row.get("pad")}
+start = next(p for p in range(1, 32) if p not in used and (p + 1) not in used)
+from_pad = post_files(
+    "/api/import-set",
+    [
+        ("pad", str(start)),
+        ("relpaths", "FromPad/One/Song.abl"),
+        ("relpaths", "FromPad/Two/Song.abl"),
+    ],
+    [
+        ("files", "Song.abl", json.dumps(song).encode()),
+        ("files", "Song.abl", json.dumps(song).encode()),
+    ],
+)
+check(
+    "folder import starts on the chosen pad and fills the next",
+    [row["pad"] for row in from_pad["imported"]] == [start, start + 1],
+    from_pad["imported"],
+)
+
+listing = get("/api/list?kind=sets")
+used = {row["pad"] for row in listing["items"] if row.get("pad")}
 dummies = []
 for pad in range(1, 33):
     if pad in used:
@@ -283,6 +304,7 @@ for uid in dummies:
 to_delete = [item["path"], off_item["path"], over["path"]]
 to_delete.extend(row["path"] for row in multi["imported"])
 to_delete.extend(row["path"] for row in nested["imported"])
+to_delete.extend(row["path"] for row in from_pad["imported"])
 post("/api/delete", {"kind": "sets", "items": to_delete})
 listing = get("/api/list?kind=sets")
 check("imported sets can be deleted to restore the mock",
