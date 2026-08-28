@@ -628,7 +628,7 @@ main {
   padding: 12px 22px;
   border: 1px dashed var(--cyan-edge);
   border-radius: var(--r);
-  background: var(--cyan-soft);
+  background: var(--surface-3);
   color: var(--cyan-text);
   font-weight: 600;
 }
