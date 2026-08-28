@@ -1,5 +1,6 @@
-/* Move My Ass — glitch wordmark palette.
-   Charcoal grain, pale pink type, cyan primary, magenta secondary. */
+/* Ableton-like palette drawn from Move pad LED colours (pad_colors.py).
+   17 blue = selection, 7 yellow = primary, 2 orange = playing/audio,
+   4 peach = presets, 18 purple = sets, 1 red = danger, 13 teal = mock. */
 
 @font-face {
   font-family: Inter;
@@ -20,22 +21,24 @@
   --line-soft: #1e1e1e;
 
   --text: #ffffff;
-  --dim: #f7f3f5;
-  --faint: #e8e2e6;
-  --muted: #cbb6c3;
-  --cyan-text: #c8f8ff;
-  --pink-text: #ffc6f8;
-  --amber-text: #f8dcc0;
+  --dim: #d2d2d2;
+  --faint: #9c9c9c;
+  --muted: #7a7a7a;
+  --cyan-text: #8eb8ff;
+  --pink-text: #ffc078;
+  --amber-text: #ffd4a8;
 
-  --cyan: #6ee8f4;
-  --cyan-soft: rgba(200, 248, 255, 0.14);
-  --cyan-edge: rgba(200, 248, 255, 0.38);
-  --pink: #f48ee8;
-  --pink-soft: rgba(255, 198, 248, 0.14);
-  --pink-edge: rgba(255, 198, 248, 0.36);
-  --amber: #ffb07a;
-  --violet: #e2d8ff;
-  --danger: #ff3a3a;
+  --cyan: #2285f0;
+  --cyan-soft: rgba(34, 133, 240, 0.18);
+  --cyan-edge: rgba(34, 133, 240, 0.55);
+  --pink: #ff8e0c;
+  --pink-soft: rgba(255, 142, 12, 0.18);
+  --pink-edge: rgba(255, 142, 12, 0.5);
+  --amber: #ffba73;
+  --violet: #b39af5;
+  --danger: #ff1917;
+  --accent: #ffe95e;
+  --mock: #00cec5;
   --ink: #0c0c0c;
 
   --r-lg: 14px;
@@ -44,7 +47,7 @@
   --pill: 999px;
 
   --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px rgba(0, 0, 0, .38);
-  --ring: 0 0 0 2px rgba(110, 232, 244, .4);
+  --ring: 0 0 0 2px rgba(34, 133, 240, .5);
   --ui: Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
@@ -56,10 +59,7 @@ html, body { height: 100%; margin: 0; }
 body {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
-  background:
-    radial-gradient(900px 280px at 8% -40px, rgba(0, 229, 255, .05), transparent 55%),
-    radial-gradient(720px 240px at 100% 0, rgba(255, 61, 245, .04), transparent 50%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
   font-family: var(--ui);
   font-size: 14px;
@@ -175,9 +175,9 @@ button.drop-item.conn-choice {
   border-radius: 50%;
   background: var(--faint);
 }
-.dot.on { background: var(--cyan); box-shadow: 0 0 0 3px rgba(110, 232, 244, .2); }
-.dot.off { background: var(--danger); box-shadow: 0 0 0 3px rgba(255, 58, 58, .18); }
-.dot.mock { background: var(--pink); box-shadow: 0 0 0 3px rgba(244, 142, 232, .2); }
+.dot.on { background: var(--cyan); box-shadow: 0 0 0 3px rgba(34, 133, 240, .22); }
+.dot.off { background: var(--danger); box-shadow: 0 0 0 3px rgba(255, 25, 23, .2); }
+.dot.mock { background: var(--mock); box-shadow: 0 0 0 3px rgba(0, 206, 197, .22); }
 
 .topbar-actions { margin-left: auto; display: flex; gap: 8px; flex-shrink: 0; }
 
@@ -279,17 +279,17 @@ button:active:not(:disabled) { background: var(--surface-2); }
 button:disabled { opacity: .38; cursor: default; }
 
 button.primary {
-  background: var(--cyan-soft);
-  border-color: var(--cyan-edge);
-  color: var(--cyan-text);
-  font-weight: 550;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--ink);
+  font-weight: 650;
   border-radius: var(--pill);
   padding: 6px 14px;
 }
 button.primary:hover:not(:disabled) {
-  background: rgba(200, 248, 255, 0.24);
-  border-color: rgba(200, 248, 255, 0.55);
-  color: #edfdff;
+  background: #fff3a8;
+  border-color: #fff3a8;
+  color: var(--ink);
 }
 
 button.ghost {
@@ -303,17 +303,17 @@ button.ghost:hover:not(:disabled) {
   color: var(--text);
 }
 button.dismiss {
-  background: var(--pink-soft);
-  border-color: var(--pink-edge);
-  color: var(--pink-text);
+  background: var(--surface-3);
+  border-color: var(--line);
+  color: var(--text);
   font-weight: 550;
   border-radius: var(--pill);
   padding: 6px 14px;
 }
 button.dismiss:hover:not(:disabled) {
-  background: rgba(255, 198, 248, 0.22);
-  border-color: rgba(255, 198, 248, 0.5);
-  color: #ffeafb;
+  background: var(--surface-4);
+  border-color: #3a3a3a;
+  color: var(--text);
 }
 
 /* ---------- studio chrome (shared with Make effect) ---------- */
@@ -504,7 +504,7 @@ main {
 .toolbar-select #btn-copy:not(:disabled) { color: var(--pink-text); }
 .toolbar-select #btn-rename:not(:disabled) { color: var(--amber-text); }
 .toolbar-select #btn-color:not(:disabled) { color: var(--violet); }
-.toolbar-select #btn-delete:not(:disabled) { color: #ffb4b4; }
+.toolbar-select #btn-delete:not(:disabled) { color: #ff6a68; }
 
 .toolbar-kit {
   display: flex;
@@ -1080,10 +1080,7 @@ dialog {
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: var(--shadow);
-  background:
-    radial-gradient(900px 280px at 8% -40px, rgba(0, 229, 255, .05), transparent 55%),
-    radial-gradient(720px 240px at 100% 0, rgba(255, 61, 245, .04), transparent 50%),
-    var(--surface);
+  background: var(--surface);
   color: var(--text);
   padding: 0 28px 12px;
   width: min(440px, 92vw);
@@ -1292,7 +1289,7 @@ button.drop-toggle:hover:not(:disabled) {
   box-shadow: var(--shadow);
   color-scheme: dark;
   scrollbar-width: thin;
-  scrollbar-color: rgba(110, 232, 244, .38) #0c0c0c;
+  scrollbar-color: rgba(34, 133, 240, .45) #0c0c0c;
 }
 .drop-menu::-webkit-scrollbar {
   width: 8px;
@@ -1305,7 +1302,7 @@ button.drop-toggle:hover:not(:disabled) {
   border-radius: 0 7px 7px 0;
 }
 .drop-menu::-webkit-scrollbar-thumb {
-  background: rgba(110, 232, 244, .38);
+  background: rgba(34, 133, 240, .45);
   border: 2px solid #0c0c0c;
   border-radius: 8px;
 }
@@ -1716,9 +1713,9 @@ button.drop-item:disabled {
   font-weight: 650;
 }
 .toolbar-fx .make:hover:not(:disabled) {
-  background: rgba(255, 198, 248, 0.22);
-  border-color: rgba(255, 198, 248, 0.5);
-  color: #ffeafb;
+  background: rgba(255, 142, 12, 0.28);
+  border-color: var(--pink-edge);
+  color: var(--pink-text);
 }
 
 .fx-instrument {
@@ -1799,10 +1796,7 @@ button.drop-item:disabled {
   max-height: calc(100dvh - 24px);
   overflow: hidden;
   padding: 0 20px 8px;
-  background:
-    radial-gradient(720px 220px at 6% -30px, rgba(0, 229, 255, .05), transparent 55%),
-    radial-gradient(560px 180px at 100% 0, rgba(255, 61, 245, .04), transparent 50%),
-    var(--surface);
+  background: var(--surface);
 }
 #fx h2 { display: none; }
 
@@ -1920,7 +1914,7 @@ button.drop-item:disabled {
   opacity: 1;
   background: conic-gradient(from 225deg, var(--pink) 0 calc(var(--pos) * 270deg), transparent 0);
 }
-.fx-knob.mapped .fx-knob-dial { border-color: rgba(110, 232, 244, .4); }
+.fx-knob.mapped .fx-knob-dial { border-color: rgba(34, 133, 240, .45); }
 .fx-knob.armed .fx-knob-dial {
   border-color: var(--pink);
   animation: fx-arm 1.4s ease-in-out infinite;
@@ -2015,7 +2009,7 @@ dialog input.fx-knob-name:focus {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, .12),
     0 0 0 4px var(--cyan-soft),
-    0 6px 16px rgba(110, 232, 244, .16);
+    0 6px 16px rgba(34, 133, 240, .18);
 }
 .fx-knob.turning .fx-knob-arc { opacity: 1; }
 .fx-knob.turning .fx-knob-notch { background: var(--cyan); }
@@ -2040,7 +2034,7 @@ dialog input.fx-knob-name:focus {
 }
 .fx-viz-wrap.live canvas.fx-viz {
   border-color: var(--cyan-edge);
-  box-shadow: inset 0 0 0 1px rgba(110, 232, 244, .18);
+  box-shadow: inset 0 0 0 1px rgba(34, 133, 240, .2);
 }
 .fx-viz-wrap.live .fx-viz-cap { color: var(--cyan-text); }
 @keyframes fx-live {

@@ -622,8 +622,8 @@ function drawWaveform(canvas, peaks, options = {}) {
   const mid = height / 2;
   const gap = slice.length > width ? 0 : 0.35;
   const bar = Math.max(1, width / slice.length);
-  const played = options.played || "rgba(244, 142, 232, 0.88)";
-  const rest = options.color || "rgba(110, 232, 244, 0.72)";
+  const played = options.played || "rgba(255, 142, 12, 0.92)";
+  const rest = options.color || "rgba(34, 133, 240, 0.82)";
   const hiStart = options.highlightStart;
   const hiEnd = options.highlightEnd;
   const span = Math.max(1e-6, end - start);
@@ -643,7 +643,7 @@ function drawWaveform(canvas, peaks, options = {}) {
     ctx.fillStyle = playedX >= 0 && x < playedX
       ? played
       : highlighted
-        ? "rgba(140, 238, 248, 0.92)"
+        ? "rgba(255, 233, 94, 0.95)"
         : rest;
     ctx.fillRect(x, mid - h / 2, Math.max(0.8, bar - gap), h);
   }
@@ -654,7 +654,7 @@ function drawWaveform(canvas, peaks, options = {}) {
     const left = Math.max(0, x);
     const right = Math.min(width, x + w);
     if (right > left) {
-      ctx.fillStyle = "rgba(110, 232, 244, 0.1)";
+      ctx.fillStyle = "rgba(34, 133, 240, 0.12)";
       ctx.fillRect(left, 0, right - left, height);
     }
   }
@@ -671,7 +671,7 @@ function drawWaveform(canvas, peaks, options = {}) {
       const t = (bounds[i] - start) / span;
       if (t < -0.02 || t > 1.02) continue;
       const x = Math.round(Math.max(0, Math.min(width - 1, t * width)));
-      ctx.fillStyle = i === active ? "rgba(244, 142, 232, 0.9)" : "rgba(244, 142, 232, 0.62)";
+      ctx.fillStyle = i === active ? "rgba(255, 233, 94, 0.95)" : "rgba(255, 233, 94, 0.65)";
       ctx.fillRect(x - 1, 0, 2, height);
       ctx.fillRect(Math.max(0, x - 4), 0, 8, 7);
       ctx.fillRect(Math.max(0, x - 4), height - 7, 8, 7);
@@ -1675,7 +1675,32 @@ function selectEmptyPad(num) {
   highlightSelection();
 }
 
+let selectionStamp = null;
+
+function currentSelectionStamp() {
+  return `${[...state.selected].sort().join("\n")}\0${state.selectedPad ?? ""}`;
+}
+
+function closeOrphanPreview() {
+  if (!preview.url) return;
+  if ([...state.selected].some((path) => previewUrl({ path }) === preview.url)) return;
+  const url = preview.url;
+  stopPlayback();
+  for (const row of rows.querySelectorAll("tr[data-path]")) {
+    if (previewUrl({ path: row.dataset.path }) !== url) continue;
+    row.classList.remove("previewing", "playing");
+    row.querySelector(".wave-player")?.remove();
+    row.querySelector(".playbtn")?.classList.remove("loading", "on");
+    break;
+  }
+  syncPlayButtons();
+}
+
 function highlightSelection() {
+  const stamp = currentSelectionStamp();
+  const selectionChanged = selectionStamp !== null && stamp !== selectionStamp;
+  selectionStamp = stamp;
+  if (selectionChanged) closeOrphanPreview();
   for (const row of rows.querySelectorAll("tr[data-path]")) {
     const on = state.selected.has(row.dataset.path);
     row.classList.toggle("selected", on);
@@ -2649,7 +2674,7 @@ function renderPads() {
 
       const head = document.createElement("div");
       head.className = "pad-head";
-      head.innerHTML = `<span>${index + 1}<kbd class="pad-key">${KIT_PAD_KEYS[index]}</kbd></span>`;
+      head.innerHTML = `<span>${index + 1} <kbd class="pad-key">(${KIT_PAD_KEYS[index]})</kbd></span>`;
 
       if (kit.mode === "pads") {
         const pad = kit.pads[index] || {};
