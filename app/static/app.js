@@ -1292,6 +1292,11 @@ function renderSetGrid() {
     nameEl.className = "name";
     nameEl.textContent = item.name;
     bindSetName(nameEl, item);
+    if (isSet && item.color) {
+      row.classList.add("colored");
+      row.style.background = item.color;
+      row.style.color = inkOn(item.color);
+    }
     const date = document.createElement("span");
     date.className = "set-loose-date";
     date.textContent = formatDate(item.mtime);
@@ -1901,8 +1906,10 @@ function renderSelection() {
     : "Upload a folder of files";
   $("btn-mkdir").hidden = factory || setsRoot;
   $("btn-mkdir").disabled = factory || setsRoot;
+  const kitFolder = Boolean(audioSection && only?.is_dir && only.category !== "set");
   $("btn-kit").hidden = !audioSection;
   $("btn-kit").disabled = !audioSection;
+  $("btn-kit").classList.toggle("on", kitFolder);
   $("btn-slice").hidden = !samplesSection;
   $("btn-slice").disabled = !(samplesSection && only?.category === "audio" && only.name.toLowerCase().endsWith(".wav"));
   $("toolbar-kit").hidden = !audioSection;
