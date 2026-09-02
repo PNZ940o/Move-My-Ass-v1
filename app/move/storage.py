@@ -41,6 +41,23 @@ OTHER_PARTS = (
     ("system", "System"),
 )
 
+LIBRARIES = (
+    ("samples", "Samples", "sample"),
+    ("recordings", "Recordings", "recording"),
+    ("sets", "Sets", "set"),
+    ("presets", "Presets", "preset"),
+    ("effects", "Effects", "effect"),
+    ("factory", "Core Library", "item"),
+)
+
+_AUDIO_FIND = (
+    "-iname '*.wav' -o -iname '*.aif' -o -iname '*.aiff' -o "
+    "-iname '*.flac' -o -iname '*.mp3' -o -iname '*.ogg' -o -iname '*.m4a'"
+)
+_PRESET_FIND = (
+    "-iname '*.ablpreset' -o -iname '*.ablpresetbundle' -o -iname '*.json'"
+)
+
 
 class StorageError(RuntimeError):
     pass
@@ -60,6 +77,35 @@ def _tree_bytes_local(backend: LocalBackend, absolute: str) -> int:
                 total += (Path(dirpath) / name).stat().st_size
             except OSError:
                 continue
+    return total
+
+
+def _count_kind(name: str, suffix: str) -> bool:
+    lower = name.lower()
+    if lower.startswith("."):
+        return False
+    if suffix == "sets":
+        return lower == "song.abl"
+    ext = os.path.splitext(lower)[1]
+    if suffix in {"samples", "recordings"}:
+        return ext in paths.AUDIO_SUFFIXES
+    if suffix in {"presets", "effects"}:
+        return ext in paths.PRESET_SUFFIXES
+    if suffix == "factory":
+        return ext in paths.AUDIO_SUFFIXES or ext in paths.PRESET_SUFFIXES
+    return False
+
+
+def _tree_count_local(backend: LocalBackend, absolute: str, kind: str) -> int:
+    root = backend._local(absolute)
+    if not root.exists():
+        return 0
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+        for name in filenames:
+            if _count_kind(name, kind):
+                total += 1
     return total
 
 
@@ -111,12 +157,45 @@ def parse_du(text: str) -> dict[str, int]:
     return found
 
 
-def _remote_usage(backend: MoveBackend) -> tuple[int, int, int, dict[str, int]]:
+def parse_counts(text: str) -> dict[str, int]:
+    """Map library ids to item counts from `echo id $(find | wc -l)` lines."""
+    found = {key: 0 for key, _label, _unit in LIBRARIES}
+    for line in text.splitlines():
+        parts = line.strip().split()
+        if len(parts) < 2 or parts[0] not in found:
+            continue
+        try:
+            found[parts[0]] = int(parts[-1])
+        except ValueError:
+            continue
+    return found
+
+
+def _count_script() -> str:
+    samples = shlex.quote(paths.SAMPLES)
+    recordings = shlex.quote(paths.RECORDINGS)
+    sets = shlex.quote(paths.SETS)
+    presets = shlex.quote(paths.TRACK_PRESETS)
+    effects = shlex.quote(paths.AUDIO_EFFECTS)
+    factory = shlex.quote(paths.CORE_LIBRARY)
+    return (
+        "echo __COUNT__; "
+        f"echo samples $(find {samples} -type f \\( {_AUDIO_FIND} \\) 2>/dev/null | wc -l); "
+        f"echo recordings $(find {recordings} -type f \\( {_AUDIO_FIND} \\) 2>/dev/null | wc -l); "
+        f"echo sets $(find {sets} -type f -iname Song.abl 2>/dev/null | wc -l); "
+        f"echo presets $(find {presets} -type f \\( {_PRESET_FIND} \\) 2>/dev/null | wc -l); "
+        f"echo effects $(find {effects} -type f \\( {_PRESET_FIND} \\) 2>/dev/null | wc -l); "
+        f"echo factory $(find {factory} -type f \\( {_AUDIO_FIND} -o {_PRESET_FIND} \\) 2>/dev/null | wc -l)"
+    )
+
+
+def _remote_usage(backend: MoveBackend) -> tuple[int, int, int, dict[str, int], dict[str, int]]:
     quoted = " ".join(f'"{path}"' for _key, path in TREES)
     script = (
         "df -Pk /data 2>/dev/null || df -Pk /data/UserData; "
         "echo __DU__; "
-        f"for p in {quoted}; do du -sk \"$p\" 2>/dev/null || echo \"0\t$p\"; done"
+        f"for p in {quoted}; do du -sk \"$p\" 2>/dev/null || echo \"0\t$p\"; done; "
+        f"{_count_script()}"
     )
     result = backend.run(script, timeout=90.0)
     if not result.ok and "__DU__" not in result.stdout:
@@ -124,20 +203,29 @@ def _remote_usage(backend: MoveBackend) -> tuple[int, int, int, dict[str, int]]:
         raise StorageError(detail)
     raw = result.stdout
     if "__DU__" in raw:
-        df_text, du_text = raw.split("__DU__", 1)
+        df_text, rest = raw.split("__DU__", 1)
     else:
-        df_text, du_text = raw, ""
+        df_text, rest = raw, ""
+    if "__COUNT__" in rest:
+        du_text, count_text = rest.split("__COUNT__", 1)
+    else:
+        du_text, count_text = rest, ""
     total, used, free = parse_df(df_text)
     trees = parse_du(du_text)
-    return total, used, free, trees
+    return total, used, free, trees, parse_counts(count_text)
 
 
-def _local_usage(backend: LocalBackend) -> tuple[int, int, int, dict[str, int]]:
+def _local_usage(backend: LocalBackend) -> tuple[int, int, int, dict[str, int], dict[str, int]]:
     trees = {key: _tree_bytes_local(backend, path) for key, path in TREES}
+    counts = {
+        key: _tree_count_local(backend, path, key)
+        for key, path in TREES
+        if key in {item[0] for item in LIBRARIES}
+    }
     used = sum(trees.values())
     total = MOCK_TOTAL if used < MOCK_TOTAL else used + 512 * 1024 * 1024
     free = max(0, total - used)
-    return total, used, free, trees
+    return total, used, free, trees, counts
 
 
 def tree_bytes(backend: MoveBackend, absolute: str) -> int:
@@ -170,11 +258,11 @@ def free_bytes(backend: MoveBackend) -> int | None:
 
 
 def usage(backend: MoveBackend) -> dict:
-    """`{total, used, free, categories}` for the top-bar meter."""
+    """`{total, used, free, categories, libraries}` for the meter and detail dialog."""
     if isinstance(backend, LocalBackend):
-        total, used, free, trees = _local_usage(backend)
+        total, used, free, trees, counts = _local_usage(backend)
     else:
-        total, used, free, trees = _remote_usage(backend)
+        total, used, free, trees, counts = _remote_usage(backend)
 
     named = trees["samples"] + trees["sets"] + trees["presets"]
     parts = {
@@ -205,9 +293,21 @@ def usage(backend: MoveBackend) -> dict:
             ]
         categories.append(entry)
 
+    libraries = [
+        {
+            "id": key,
+            "label": label,
+            "unit": unit,
+            "bytes": trees[key],
+            "count": counts.get(key, 0),
+        }
+        for key, label, unit in LIBRARIES
+    ]
+
     return {
         "total": total,
         "used": used,
         "free": free,
         "categories": categories,
+        "libraries": libraries,
     }

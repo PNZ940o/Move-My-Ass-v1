@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import posixpath
+import re
 
 from . import paths, sets
 from .backend import Entry, MoveBackend
 
 
 HIDDEN_NAMES = {sets.XATTR_FILE}
+COPY_SUFFIX_RE = re.compile(r" \(copy(?: \d+)?\)$")
 
 
 def categorise(entry: Entry) -> str:
@@ -144,6 +146,8 @@ def move_into_samples(backend: MoveBackend, kind: str, items: list[str], dest_fo
 
 
 def _copy_entry(backend: MoveBackend, source: str, dest: str) -> None:
+    if not backend.exists(source):
+        raise FileNotFoundError(f"{posixpath.basename(source)} not found")
     if backend.is_dir(source):
         backend.makedirs(dest)
         for entry in backend.list_dir(source):
@@ -152,5 +156,109 @@ def _copy_entry(backend: MoveBackend, source: str, dest: str) -> None:
             _copy_entry(backend, entry.path, posixpath.join(dest, entry.name))
         return
     if backend.exists(dest):
-        raise FileExistsError(f"{posixpath.basename(dest)} already exists in Samples")
+        raise FileExistsError(f"{posixpath.basename(dest)} already exists")
     backend.write_file(dest, backend.read_file(source))
+
+
+def _top_level_items(items: list[str]) -> list[str]:
+    cleaned = [item.replace("\\", "/").strip("/") for item in items if item and item.replace("\\", "/").strip("/")]
+    return [
+        path
+        for path in cleaned
+        if not any(path != other and path.startswith(other + "/") for other in cleaned)
+    ]
+
+
+def unique_copy_name(backend: MoveBackend, dest_dir: str, filename: str) -> str:
+    """Pick `name (copy).ext`, then `name (copy 2).ext`, so a paste never clobbers."""
+    stem, ext = posixpath.splitext(filename)
+    base = COPY_SUFFIX_RE.sub("", stem).strip() or stem
+    candidate = f"{base} (copy){ext}"
+    n = 2
+    while backend.exists(posixpath.join(dest_dir, candidate)):
+        candidate = f"{base} (copy {n}){ext}"
+        n += 1
+    return candidate
+
+
+def resolve_dest_dir(backend: MoveBackend, kind: str, dest: str) -> tuple[str, str]:
+    """Folder to paste into. A file path means 'that file's folder', like Explorer."""
+    dest = (dest or "").replace("\\", "/").strip("/")
+    dest_abs = paths.resolve(kind, dest)
+    if dest and backend.exists(dest_abs) and not backend.is_dir(dest_abs):
+        dest = posixpath.dirname(dest)
+        dest_abs = paths.resolve(kind, dest)
+    if dest and not backend.is_dir(dest_abs):
+        raise ValueError("destination folder not found")
+    return dest, dest_abs
+
+
+def copy_dest_name(backend: MoveBackend, dest_dir: str, filename: str) -> str:
+    if not backend.exists(posixpath.join(dest_dir, filename)):
+        return filename
+    return unique_copy_name(backend, dest_dir, filename)
+
+
+def can_paste(source_kind: str, dest_kind: str) -> bool:
+    """Samples and Recordings are both audio libraries, so copy/paste works either way.
+
+    Core Library can still be pasted into Samples. Other cross-section pastes
+    (presets, effects, sets) stay refused.
+    """
+    if source_kind == dest_kind:
+        return True
+    if source_kind == "factory" and dest_kind == "samples":
+        return True
+    return {source_kind, dest_kind} <= {"samples", "recordings"}
+
+
+def copy_items(
+    backend: MoveBackend,
+    source_kind: str,
+    dest_kind: str,
+    items: list[str],
+    dest: str = "",
+) -> tuple[list[dict], list[dict]]:
+    """Copy files or folders into a destination folder.
+
+    Same-section duplicates keep the original name when it is free, otherwise
+    ` (copy)`. Factory items can be pasted into Samples. Samples and Recordings
+    can be pasted into each other. Pad-set UUID folders must go through copy-set.
+    """
+    if not items:
+        raise ValueError("nothing to copy")
+    if not paths.writable(dest_kind):
+        raise ValueError("can't paste into a read-only section")
+    if not can_paste(source_kind, dest_kind):
+        raise ValueError("can only paste within the same section")
+
+    dest, dest_abs = resolve_dest_dir(backend, dest_kind, dest)
+
+    copied, failed = [], []
+    for item in _top_level_items(items):
+        try:
+            source = paths.resolve(source_kind, item)
+            name = posixpath.basename(source)
+            if not name:
+                raise ValueError("cannot copy a library root")
+            if not backend.exists(source):
+                raise FileNotFoundError(f"{name} not found")
+
+            source_at_sets_root = source_kind == "sets" and "/" not in item
+            if source_at_sets_root and sets.is_set_uuid(item):
+                raise ValueError("use copy-set to duplicate pad sets")
+
+            if source == dest_abs or dest_abs.startswith(source + "/"):
+                raise ValueError("can't copy a folder into itself")
+
+            filename = copy_dest_name(backend, dest_abs, name)
+            sets.guard_write(dest_kind, posixpath.join(dest, filename).replace("\\", "/"))
+            target = posixpath.join(dest_abs, filename)
+            _copy_entry(backend, source, target)
+            copied.append({
+                "src": item,
+                "path": paths.relative_to(dest_kind, target),
+            })
+        except Exception as exc:
+            failed.append({"name": item, "error": str(exc)})
+    return copied, failed

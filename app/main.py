@@ -383,9 +383,10 @@ async def move_items(body: MoveRequest):
         raise HTTPException(status_code=400, detail="nothing to move")
 
     backend = get_backend()
-    dest_abs = paths.resolve(body.kind, body.dest)
-    if body.dest.strip("/") and not backend.is_dir(dest_abs):
-        raise HTTPException(status_code=400, detail="destination is not a folder")
+    try:
+        dest, dest_abs = library.resolve_dest_dir(backend, body.kind, body.dest)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     moved, failed = [], []
     builder = undo.Builder(
@@ -406,7 +407,7 @@ async def move_items(body: MoveRequest):
             if at_sets_root and sets.is_set_uuid(item):
                 raise ValueError("pad sets stay on the grid")
 
-            sets.guard_write(body.kind, posixpath.join(body.dest, name).replace("\\", "/"))
+            sets.guard_write(body.kind, posixpath.join(dest, name).replace("\\", "/"))
 
             if source == dest_abs or dest_abs.startswith(source + "/"):
                 raise ValueError("can't move a folder into itself")
@@ -429,6 +430,44 @@ async def move_items(body: MoveRequest):
     if moved:
         backend.refresh_library()
     return {"moved": moved, "failed": failed}
+
+
+class CopyRequest(BaseModel):
+    kind: str
+    items: list[str]
+    dest: str = ""
+    source_kind: str | None = None
+
+
+@app.post("/api/copy")
+async def copy_items(body: CopyRequest):
+    """Duplicate files or folders into a destination folder.
+
+    `source_kind` defaults to `kind`. Factory items may be pasted into Samples.
+    Samples and Recordings may be pasted into each other.
+    """
+    source_kind = body.source_kind or body.kind
+    require_writable(body.kind)
+    try:
+        copied, failed = library.copy_items(
+            get_backend(), source_kind, body.kind, body.items, body.dest
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if copied:
+        backend = get_backend()
+        builder = undo.Builder(
+            backend,
+            f"Copy {posixpath.basename(copied[0]['src'])}"
+            if len(copied) == 1
+            else f"Copy {len(copied)} items",
+        )
+        for item in copied:
+            builder.created(paths.resolve(body.kind, item["path"]))
+        commit_undo(builder)
+        backend.refresh_library()
+    return {"copied": copied, "failed": failed}
 
 
 class CopyToSamplesRequest(BaseModel):

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings  # noqa: E402
 from app.move.backend import LocalBackend  # noqa: E402
-from app.move.storage import MOCK_TOTAL, parse_df, parse_du, usage  # noqa: E402
+from app.move.storage import MOCK_TOTAL, parse_counts, parse_df, parse_du, usage  # noqa: E402
 
 failures: list[str] = []
 
@@ -43,6 +43,12 @@ check("du presets", trees["presets"] == 2048 * 1024, trees)
 check("du sets", trees["sets"] == 4096 * 1024, trees)
 check("du recordings", trees["recordings"] == 1024 * 1024, trees)
 
+counts = parse_counts("samples 12\nrecordings 3\nsets 9\npresets 4\n")
+check("count samples", counts["samples"] == 12, counts)
+check("count recordings", counts["recordings"] == 3, counts)
+check("count sets", counts["sets"] == 9, counts)
+check("count presets", counts["presets"] == 4, counts)
+
 data = usage(LocalBackend(settings.mock_root))
 by_id = {item["id"]: item for item in data["categories"]}
 check("mock total is the advertised 50 GB", data["total"] == MOCK_TOTAL, data["total"])
@@ -50,6 +56,13 @@ check("mock used fits on the disk", data["used"] + data["free"] == data["total"]
 check("samples take some space", by_id["samples"]["bytes"] > 0, by_id["samples"])
 check("sets take some space", by_id["sets"]["bytes"] > 0, by_id["sets"])
 check("categories add up to used", sum(item["bytes"] for item in data["categories"]) == data["used"], data)
+by_lib = {item["id"]: item for item in data["libraries"]}
+check("libraries lists samples", "samples" in by_lib and "count" in by_lib["samples"], by_lib)
+check("libraries lists recordings", "recordings" in by_lib, by_lib)
+check("libraries lists sets", "sets" in by_lib, by_lib)
+check("libraries lists presets", "presets" in by_lib, by_lib)
+check("libraries lists effects", "effects" in by_lib, by_lib)
+check("libraries lists core library", "factory" in by_lib and by_lib["factory"]["label"] == "Core Library", by_lib)
 
 base = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8001")
 try:

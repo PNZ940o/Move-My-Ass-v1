@@ -4,6 +4,7 @@ const state = {
   items: [],
   selected: new Set(),
   selectedPad: null,
+  rangeAnchor: null,
   setLabels: {},
   expanded: new Set(),
   children: {},
@@ -46,10 +47,21 @@ function formatStorageSize(bytes) {
 
 const STORAGE_COLORS = {
   samples: "samples",
+  recordings: "recordings",
   sets: "sets",
   presets: "presets",
+  effects: "effects",
+  factory: "factory",
   other: "other",
 };
+
+const STORAGE_ORDER = ["samples", "sets", "presets", "factory"];
+const STORAGE_NEST = {
+  samples: ["recordings"],
+  presets: ["effects"],
+};
+
+let lastStorage = null;
 
 function storagePartHint(category) {
   const parts = (category.parts || []).filter((part) => part.bytes > 0);
@@ -72,6 +84,7 @@ function renderStorage(data) {
   }
   wrap.hidden = false;
   wrap.dataset.ready = "1";
+  lastStorage = data;
   const pct = Math.max(0, Math.min(100, (used / total) * 100));
   usedEl.textContent = `${formatStorageSize(used)} used of ${formatStorageSize(total)}`;
   usedEl.title = `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}% full · ${formatStorageSize(free)} free`;
@@ -105,6 +118,7 @@ function renderStorage(data) {
     item.title = extra || `${category.label} ${formatStorageSize(bytes)}`;
     legend.append(item);
   }
+  if ($("storage-detail")?.open) renderStorageDetail(data);
 }
 
 let storageRequest = 0;
@@ -130,6 +144,118 @@ async function refreshStorage() {
   } finally {
     if (gen === storageRequest) wrap.classList.remove("busy");
   }
+}
+
+function storageCountLabel(count, unit) {
+  const n = Number(count) || 0;
+  if (n === 1) return `1 ${unit}`;
+  return `${n} ${unit}s`;
+}
+
+function fillStorageBar(bar, data) {
+  if (!bar) return;
+  bar.innerHTML = "";
+  const total = Number(data.total) || 0;
+  const used = Number(data.used) || 0;
+  const free = Number(data.free) || Math.max(0, total - used);
+  if (total <= 0) return;
+  const segments = [...(data.categories || []), { id: "free", label: "Free", bytes: free }];
+  for (const category of segments) {
+    const bytes = Number(category.bytes) || 0;
+    let width = (bytes / total) * 100;
+    if (bytes > 0 && width < 0.7) width = 0.7;
+    const seg = document.createElement("span");
+    seg.className = `storage-seg ${category.id}`;
+    seg.style.width = `${width}%`;
+    seg.title = `${category.label} ${formatStorageSize(bytes)}`;
+    bar.append(seg);
+  }
+}
+
+function storageLibraries(data) {
+  const byId = {};
+  for (const item of data.libraries || []) byId[item.id] = item;
+  if (!data.libraries?.length) {
+    for (const category of data.categories || []) {
+      if (category.id !== "other") {
+        byId[category.id] = { id: category.id, label: category.label, unit: "item", bytes: category.bytes, count: 0 };
+      }
+      for (const part of category.parts || []) {
+        byId[part.id] = { id: part.id, label: part.label, unit: "item", bytes: part.bytes, count: 0 };
+      }
+    }
+  }
+  const rows = [];
+  for (const id of STORAGE_ORDER) {
+    const item = byId[id];
+    if (!item) continue;
+    rows.push(item);
+    for (const childId of STORAGE_NEST[id] || []) {
+      const child = byId[childId];
+      if (child) rows.push({ ...child, child: true });
+    }
+  }
+  return rows;
+}
+
+function renderStorageDetail(data) {
+  const summary = $("storage-detail-summary");
+  const rows = $("storage-detail-rows");
+  const hint = $("storage-detail-hint");
+  if (!summary || !rows) return;
+  const total = Number(data.total) || 0;
+  const used = Number(data.used) || 0;
+  const free = Number(data.free) || Math.max(0, total - used);
+  const pct = total ? Math.max(0, Math.min(100, (used / total) * 100)) : 0;
+  summary.textContent = total
+    ? `${formatStorageSize(used)} used of ${formatStorageSize(total)} · ${formatStorageSize(free)} free · ${pct < 10 ? pct.toFixed(1) : Math.round(pct)}% full`
+    : "Storage is not available yet.";
+  fillStorageBar($("storage-detail-bar"), data);
+  rows.innerHTML = "";
+  const libraries = storageLibraries(data);
+  for (const item of libraries) {
+    const tr = document.createElement("tr");
+    const bytes = Number(item.bytes) || 0;
+    const count = Number(item.count) || 0;
+    if (item.child) tr.classList.add("child");
+    if (!bytes && !count) tr.classList.add("empty");
+    const name = document.createElement("td");
+    const label = document.createElement("span");
+    label.className = "label";
+    const swatch = document.createElement("i");
+    swatch.className = STORAGE_COLORS[item.id] || "other";
+    label.append(swatch, document.createTextNode(item.label));
+    name.append(label);
+    const items = document.createElement("td");
+    items.className = "n";
+    items.textContent = storageCountLabel(count, item.unit || "item");
+    const size = document.createElement("td");
+    size.className = "n";
+    size.textContent = formatStorageSize(bytes);
+    tr.append(name, items, size);
+    rows.append(tr);
+  }
+  const extras = [];
+  for (const category of data.categories || []) {
+    for (const part of category.parts || []) {
+      if (libraries.some((item) => item.id === part.id)) continue;
+      extras.push(`${part.label} ${formatStorageSize(part.bytes)}`);
+    }
+  }
+  if (hint) {
+    hint.textContent = extras.length
+      ? `Also on disk: ${extras.join(" · ")}`
+      : "These numbers come from the folders on Move.";
+  }
+}
+
+function openStorageDetail() {
+  const dialog = $("storage-detail");
+  if (!dialog) return;
+  if (lastStorage) renderStorageDetail(lastStorage);
+  else if ($("storage-detail-summary")) $("storage-detail-summary").textContent = "Measuring storage…";
+  if (!dialog.open) dialog.showModal();
+  refreshStorage();
 }
 
 function formatDate(seconds) {
@@ -250,6 +376,8 @@ async function loadStatus() {
   try {
     applyStatus(await api("/api/status"));
   } catch (error) {
+    $("conn-dot").className = "dot off";
+    $("conn-text").textContent = "offline";
     toast(error.message, "error");
   }
 }
@@ -397,6 +525,13 @@ function renderCrumbs() {
   const crumbs = $("crumbs");
   crumbs.innerHTML = "";
   const parts = state.path ? state.path.split("/").filter(Boolean) : [];
+  const root = document.createElement("button");
+  root.textContent = sectionLabel(state.kind);
+  root.title = "Library root";
+  if (!parts.length) root.className = "current";
+  root.onclick = () => navigate("");
+  if (!isFactory()) bindFolderDrop(root, "");
+  crumbs.append(root);
   if (!parts.length) return;
 
   const up = document.createElement("button");
@@ -406,7 +541,7 @@ function renderCrumbs() {
   const parent = parts.slice(0, -1).join("/");
   up.onclick = () => navigate(parent);
   bindFolderDrop(up, parent);
-  crumbs.append(up);
+  crumbs.prepend(up);
 
   parts.forEach((part, index) => {
     const sep = document.createElement("span");
@@ -429,6 +564,7 @@ const ICONS = { folder: "▸", audio: "♪", preset: "◆", set: "●", other: "
 /* In-listing drag onto a folder. Flag, not a MIME type — Safari hides custom types. */
 let internalMove = null;
 let internalSetCopy = null;
+let fileClipboard = null;
 
 function knownItems() {
   const found = [...state.items];
@@ -455,11 +591,44 @@ function visibleItems() {
 }
 
 function destFolder() {
-  if (state.selected.size === 1) {
-    const item = itemByPath([...state.selected][0]);
-    if (item?.is_dir && item.category !== "set") return item.path;
+  const chosen = chosenItems();
+  if (chosen.length === 1) {
+    const item = chosen[0];
+    if (item.is_dir && item.category !== "set") return item.path;
+    return parentPath(item.path);
+  }
+  if (chosen.length > 1) {
+    const parents = new Set(chosen.map((item) => parentPath(item.path)));
+    if (parents.size === 1) return [...parents][0];
   }
   return state.path;
+}
+
+function pasteDest(clipPaths) {
+  let dest = destFolder();
+  if (fileClipboard && fileClipboard.kind !== state.kind) return dest;
+  const blocked = (clipPaths || []).find((path) => destContainsSource(dest, path));
+  if (blocked) dest = parentPath(blocked);
+  return dest;
+}
+
+function canPasteClipboard(clip) {
+  if (!clip?.kind) return false;
+  if (clip.kind === state.kind) return true;
+  if (clip.mode !== "copy") return false;
+  if (clip.kind === "factory" && state.kind === "samples") return true;
+  const audio = (kind) => kind === "samples" || kind === "recordings";
+  return audio(clip.kind) && audio(state.kind);
+}
+
+function revealFolder(path) {
+  if (!path) return;
+  let cur = "";
+  for (const part of path.split("/").filter(Boolean)) {
+    cur = cur ? `${cur}/${part}` : part;
+    state.expanded.add(cur);
+    delete state.children[cur];
+  }
 }
 
 function isFxPreset(item) {
@@ -486,6 +655,170 @@ function destContainsSource(dest, source) {
   return dest === source || dest.startsWith(`${source}/`);
 }
 
+function topLevelPaths(paths) {
+  return paths.filter((path) => !paths.some((other) => other !== path && path.startsWith(`${other}/`)));
+}
+
+function sectionLabel(kind) {
+  const tab = document.querySelector(`.tab[data-kind="${kind}"]`);
+  return tab?.textContent?.trim() || kind;
+}
+
+function isCutPath(path) {
+  return Boolean(fileClipboard && fileClipboard.mode === "cut" && fileClipboard.kind === state.kind && fileClipboard.items.some((item) => item.path === path));
+}
+
+function nativeClipboardTarget(target) {
+  return Boolean(target?.closest?.("input, textarea, select, [contenteditable='true'], [contenteditable='']"));
+}
+
+function fileClipboardBlocked(target) {
+  if (nativeClipboardTarget(target)) return true;
+  return Boolean(document.querySelector("dialog[open]"));
+}
+
+function clipboardSelection() {
+  const chosen = chosenItems();
+  const top = new Set(topLevelPaths(chosen.map((item) => item.path)));
+  return chosen.filter((item) => top.has(item.path)).map((item) => ({
+    path: item.path,
+    name: item.name,
+    isSet: item.category === "set",
+  }));
+}
+
+function markClipboardVisuals() {
+  for (const row of rows.querySelectorAll("tr[data-path]")) {
+    row.classList.toggle("cut", isCutPath(row.dataset.path));
+  }
+  for (const pad of document.querySelectorAll("#setgrid .set-pad[data-path]")) {
+    pad.classList.toggle("cut", isCutPath(pad.dataset.path));
+  }
+  for (const row of document.querySelectorAll("#set-loose .set-loose-item[data-path]")) {
+    row.classList.toggle("cut", isCutPath(row.dataset.path));
+  }
+}
+
+function copySelection(mode) {
+  const items = clipboardSelection();
+  if (!items.length) return false;
+  if (mode === "cut") {
+    if (isFactory()) {
+      toast("Core Library is read-only", "error");
+      return true;
+    }
+    if (items.some((item) => item.isSet)) {
+      toast("Pad sets stay on the grid", "error");
+      return true;
+    }
+  }
+  fileClipboard = { kind: state.kind, mode, items };
+  const count = items.length;
+  toast(
+    `${mode === "cut" ? "Cut" : "Copied"} ${count} item${count === 1 ? "" : "s"}`,
+    "ok",
+  );
+  markClipboardVisuals();
+  return true;
+}
+
+async function pasteClipboard() {
+  const clip = fileClipboard;
+  if (!clip?.items?.length) return;
+  if (isFactory()) {
+    toast("Can't paste into Core Library", "error");
+    return;
+  }
+
+  const setItems = clip.items.filter((item) => item.isSet);
+  const fileItems = clip.items.filter((item) => !item.isSet);
+
+  if (setItems.length) {
+    if (clip.mode === "cut") {
+      toast("Pad sets stay on the grid", "error");
+      return;
+    }
+    if (state.kind !== "sets" || state.path) {
+      toast("Paste sets on the Sets page", "error");
+      return;
+    }
+    await pasteCopiedSets(setItems);
+    return;
+  }
+
+  if (!canPasteClipboard(clip)) {
+    toast(
+      clip.mode === "cut"
+        ? `Cut items stay in ${sectionLabel(clip.kind)} — copy them to paste here`
+        : `Paste in ${sectionLabel(clip.kind)}`,
+      "error",
+    );
+    return;
+  }
+
+  const paths = fileItems.map((item) => item.path);
+  if (!paths.length) return;
+  const dest = pasteDest(paths);
+  if (clip.mode === "cut") {
+    const result = await moveItems(paths, dest, clip.kind);
+    if (!result) return;
+    const keep = (result.moved.length ? result.moved : paths).map((path) => {
+      const name = path.split("/").filter(Boolean).pop();
+      return dest ? `${dest}/${name}` : name;
+    });
+    fileClipboard = null;
+    state.selected = new Set(keep);
+    renderRows();
+    return;
+  }
+  await copyItems(paths, dest, clip.kind);
+}
+
+async function pasteCopiedSets(items) {
+  const copied = [];
+  const failed = [];
+  for (const item of items) {
+    try {
+      const result = await apiJson("/api/copy-set", { path: item.path });
+      copied.push(result.path);
+    } catch (error) {
+      failed.push({ name: item.name || item.path, error: error.message });
+    }
+  }
+  if (copied.length) toast(`Copied ${copied.length} set${copied.length === 1 ? "" : "s"} off the grid`, failed.length ? "error" : "ok");
+  else toast("Could not paste sets", "error");
+  for (const failure of failed.slice(0, 3)) toast(`${failure.name}: ${failure.error}`, "error");
+  await load();
+  refreshStorage();
+  if (copied.length) {
+    state.selected = new Set(copied);
+    renderRows();
+  }
+}
+
+async function copyItems(paths, dest, sourceKind = state.kind) {
+  try {
+    const payload = { kind: state.kind, items: paths, dest };
+    if (sourceKind !== state.kind) payload.source_kind = sourceKind;
+    const result = await apiJson("/api/copy", payload);
+    const count = result.copied.length;
+    if (count) toast(`Pasted ${count} item${count === 1 ? "" : "s"}`, result.failed.length ? "error" : "ok");
+    else toast("Could not paste", "error");
+    for (const failure of (result.failed || []).slice(0, 3)) {
+      toast(`${failure.name.split("/").pop()}: ${failure.error}`, "error");
+    }
+    revealFolder(dest);
+    await load();
+    refreshStorage();
+    if (count) {
+      state.selected = new Set(result.copied.map((item) => item.path));
+      renderRows();
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 function bindFolderDrop(el, destPath) {
   el.addEventListener("dragover", (event) => {
     if (!internalMove) return;
@@ -496,6 +829,7 @@ function bindFolderDrop(el, destPath) {
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
+    drop.classList.remove("drop-here");
     el.classList.add("drop-target");
   });
   el.addEventListener("dragleave", (event) => {
@@ -513,29 +847,29 @@ function bindFolderDrop(el, destPath) {
 }
 
 function parentPath(path) {
-  const slash = path.lastIndexOf("/");
+  const slash = (path || "").lastIndexOf("/");
   return slash === -1 ? "" : path.slice(0, slash);
 }
 
-async function moveItems(paths, dest) {
+async function moveItems(paths, dest, kind = state.kind) {
   const moving = paths.filter(
     (path) => path !== dest && parentPath(path) !== dest && !destContainsSource(dest, path),
   );
-  if (!moving.length) return;
+  if (!moving.length) return { moved: [], failed: [] };
   try {
-    const result = await apiJson("/api/move", { kind: state.kind, items: moving, dest });
+    const result = await apiJson("/api/move", { kind, items: moving, dest });
     const count = result.moved.length;
     if (count) toast(`Moved ${count} item${count === 1 ? "" : "s"}`, result.failed.length ? "error" : "ok");
     for (const failure of (result.failed || []).slice(0, 3)) {
       toast(`${failure.name.split("/").pop()}: ${failure.error}`, "error");
     }
-    if (count && dest && state.expanded.has(dest)) {
-      delete state.children[dest];
-    }
+    revealFolder(dest);
     await load();
     refreshStorage();
+    return result;
   } catch (error) {
     toast(error.message, "error");
+    return null;
   }
 }
 
@@ -964,6 +1298,7 @@ function makeRow(item, depth) {
   if (open) tr.classList.add("open");
   if (isSet) tr.classList.add("set-row");
   if (state.selected.has(item.path)) tr.classList.add("selected");
+  if (isCutPath(item.path)) tr.classList.add("cut");
 
   const check = document.createElement("td");
   check.className = "c-check";
@@ -973,6 +1308,11 @@ function makeRow(item, depth) {
   box.addEventListener("mousedown", (event) => event.stopPropagation());
   box.addEventListener("click", (event) => {
     event.stopPropagation();
+    if (event.shiftKey) {
+      event.preventDefault();
+      selectPath(item.path, event);
+      return;
+    }
     toggle(item.path, box.checked);
   });
   check.append(box);
@@ -1034,8 +1374,15 @@ function makeRow(item, depth) {
       cancelPendingRename();
       return;
     }
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      cancelPendingRename();
+      selectPath(item.path, event);
+      return;
+    }
     const already = state.selected.size === 1 && state.selected.has(item.path);
     state.selected = new Set([item.path]);
+    state.rangeAnchor = item.path;
     highlightSelection();
     if (isFactory()) return;
     if (!clickHitsNameText(nameEl, event)) return;
@@ -1068,10 +1415,10 @@ function makeRow(item, depth) {
   tr.append(check, name, size, date);
   tr.setAttribute("aria-label", item.name);
   tr.onclick = (event) => {
-    if (event.target.closest("button.name, .name-edit")) return;
+    if (event.target.closest("button.name, .name-edit, input[type=checkbox]")) return;
     cancelPendingRename();
-    state.selected = new Set([item.path]);
-    highlightSelection();
+    if (event.shiftKey) event.preventDefault();
+    selectPath(item.path, event);
   };
   if (isFolder) {
     tr.addEventListener("dblclick", (event) => {
@@ -1092,6 +1439,10 @@ function makeRow(item, depth) {
 
   tr.draggable = !isFactory() && item.category !== "set";
   tr.addEventListener("dragstart", (event) => {
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      return;
+    }
     if (event.target.closest("input, .playbtn, .wave-player")) {
       event.preventDefault();
       return;
@@ -1111,7 +1462,7 @@ function makeRow(item, depth) {
   tr.addEventListener("dragend", () => {
     internalMove = null;
     tr.classList.remove("dragging-row");
-    drop.classList.remove("reordering");
+    drop.classList.remove("reordering", "drop-here");
     document.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
   });
   if (isFolder && !isFactory()) bindFolderDrop(tr, item.path);
@@ -1157,7 +1508,13 @@ function bindSetName(nameEl, item) {
       cancelPendingRename();
       return;
     }
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      selectSetPath(item.path, event);
+      return;
+    }
     state.selected = new Set([item.path]);
+    state.rangeAnchor = item.path;
     highlightSelection();
     if (isFactory()) return;
     startInlineRename(item, nameEl);
@@ -1217,13 +1574,13 @@ function makeSetPad(num, item) {
     if (padDragMoved) return;
     if (event.target.closest("button.name, .name-edit")) return;
     cancelPendingRename();
-    selectOnly(item.path);
+    selectSetPath(item.path, event);
   };
   pad.onkeydown = (event) => {
     if (event.target.closest(".name-edit")) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      selectOnly(item.path);
+      selectSetPath(item.path, event);
     }
   };
   bindSetCopyDrag(pad, item);
@@ -1285,6 +1642,7 @@ function renderSetGrid() {
     const row = document.createElement("div");
     row.className = "set-loose-item" + (isSet ? "" : " folder");
     row.dataset.path = item.path;
+    if (isCutPath(item.path)) row.classList.add("cut");
     row.setAttribute("role", "button");
     row.tabIndex = 0;
     const nameEl = document.createElement("button");
@@ -1305,7 +1663,7 @@ function renderSetGrid() {
       if (padDragMoved) return;
       if (event.target.closest("button.name, .name-edit")) return;
       cancelPendingRename();
-      selectOnly(item.path);
+      selectSetPath(item.path, event);
     };
     if (isSet) bindSetCopyDrag(row, item);
     loose.append(row);
@@ -1379,6 +1737,7 @@ function highlightSetDrop(hit) {
 function bindSetCopyDrag(el, item) {
   el.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
+    if (event.shiftKey || event.ctrlKey || event.metaKey) return;
     if (event.target.closest(".name-edit, input")) return;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -1665,19 +2024,66 @@ function toggle(path, on) {
   state.selectedPad = null;
   if (on) state.selected.add(path);
   else state.selected.delete(path);
+  state.rangeAnchor = path;
   highlightSelection();
 }
 
 function selectOnly(path) {
   state.selectedPad = null;
   state.selected = new Set([path]);
+  state.rangeAnchor = path;
   highlightSelection();
 }
 
 function selectEmptyPad(num) {
   state.selected.clear();
+  state.rangeAnchor = null;
   state.selectedPad = state.selectedPad === num ? null : num;
   highlightSelection();
+}
+
+function selectableGroups() {
+  if (showingSetPads()) {
+    const pads = [];
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 8; col++) {
+        const num = (3 - row) * 8 + col + 1;
+        const el = document.querySelector(`#setgrid .set-pad[data-pad="${num}"][data-path]`);
+        if (el?.dataset.path) pads.push(el.dataset.path);
+      }
+    }
+    const loose = [...document.querySelectorAll("#set-loose .set-loose-item[data-path]")].map(
+      (el) => el.dataset.path,
+    );
+    return [pads, loose];
+  }
+  return [visibleItems().map((item) => item.path)];
+}
+
+function selectPath(path, event = {}, options = {}) {
+  state.selectedPad = null;
+  const additive = Boolean(options.additive) || event.ctrlKey || event.metaKey;
+  const groups = selectableGroups();
+  const group = groups.find((list) => list.includes(path) && list.includes(state.rangeAnchor));
+  if (event.shiftKey && group) {
+    const a = group.indexOf(state.rangeAnchor);
+    const b = group.indexOf(path);
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const range = group.slice(lo, hi + 1);
+    state.selected = additive ? new Set([...state.selected, ...range]) : new Set(range);
+  } else if (additive) {
+    if (state.selected.has(path)) state.selected.delete(path);
+    else state.selected.add(path);
+    state.rangeAnchor = path;
+  } else {
+    state.selected = new Set([path]);
+    state.rangeAnchor = path;
+  }
+  highlightSelection();
+}
+
+function selectSetPath(path, event) {
+  selectPath(path, event);
 }
 
 let selectionStamp = null;
@@ -1720,6 +2126,7 @@ function highlightSelection() {
   for (const row of document.querySelectorAll("#set-loose .set-loose-item[data-path]")) {
     row.classList.toggle("selected", state.selected.has(row.dataset.path));
   }
+  markClipboardVisuals();
   renderSelection();
 }
 
@@ -1928,7 +2335,9 @@ function renderSelection() {
 
 $("check-all").onclick = (event) => {
   state.selectedPad = null;
-  state.selected = event.target.checked ? new Set(visibleItems().map((i) => i.path)) : new Set();
+  const items = visibleItems();
+  state.selected = event.target.checked ? new Set(items.map((i) => i.path)) : new Set();
+  state.rangeAnchor = event.target.checked ? items.at(-1)?.path ?? null : null;
   highlightSelection();
 };
 
@@ -1942,6 +2351,7 @@ async function load() {
     if (gen !== loadGen) return;
     state.items = data.items;
     state.selected.clear();
+    state.rangeAnchor = null;
     state.selectedPad = null;
     if (state.kind === "sets" && !state.path) {
       state.setLabels = Object.fromEntries(
@@ -2124,6 +2534,23 @@ async function collectDropped(dataTransfer) {
 const drop = $("drop");
 let dragDepth = 0;
 
+function listingRowHit(event) {
+  return event.target.closest("tr[data-path], .set-pad, .set-loose-item, .name-edit");
+}
+
+function clearListingSelection(event) {
+  if (listingRowHit(event)) return;
+  if (event.target.closest("button, input, a, dialog, .toolbar")) return;
+  cancelPendingRename();
+  if (!state.selected.size && state.selectedPad == null) return;
+  state.selected.clear();
+  state.selectedPad = null;
+  state.rangeAnchor = null;
+  highlightSelection();
+}
+
+drop.addEventListener("click", clearListingSelection);
+
 drop.addEventListener("dragenter", (event) => {
   event.preventDefault();
   if (internalMove || internalSetCopy || isFactory()) return;
@@ -2132,10 +2559,25 @@ drop.addEventListener("dragenter", (event) => {
 });
 drop.addEventListener("dragover", (event) => {
   event.preventDefault();
-  if (internalMove) event.dataTransfer.dropEffect = "move";
+  if (internalMove) {
+    const overFolder = event.target.closest("tr.folder, .crumbs button, .crumb-up");
+    const here = state.path;
+    const canLand = internalMove.paths.some(
+      (path) => path !== here && parentPath(path) !== here && !destContainsSource(here, path),
+    );
+    if (overFolder || !canLand) {
+      drop.classList.remove("drop-here");
+      if (!overFolder) event.dataTransfer.dropEffect = "none";
+    } else {
+      event.dataTransfer.dropEffect = "move";
+      drop.classList.add("drop-here");
+    }
+    return;
+  }
   if (internalSetCopy) event.dataTransfer.dropEffect = "copy";
 });
-drop.addEventListener("dragleave", () => {
+drop.addEventListener("dragleave", (event) => {
+  if (!drop.contains(event.relatedTarget)) drop.classList.remove("drop-here");
   if (internalMove || internalSetCopy) return;
   if (--dragDepth <= 0) {
     dragDepth = 0;
@@ -2145,8 +2587,16 @@ drop.addEventListener("dragleave", () => {
 drop.addEventListener("drop", async (event) => {
   event.preventDefault();
   dragDepth = 0;
-  drop.classList.remove("dragging");
-  if (internalMove || internalSetCopy) return;
+  drop.classList.remove("dragging", "drop-here");
+  if (internalSetCopy) return;
+  if (internalMove) {
+    if (event.target.closest("tr.folder")) return;
+    const { paths } = internalMove;
+    internalMove = null;
+    if (isFactory() || showingSetPads()) return;
+    await moveItems(paths, state.path);
+    return;
+  }
   if (isFactory()) {
     toast("Factory library is read-only — copy items into Samples", "error");
     return;
@@ -5914,12 +6364,41 @@ if ($("fx-download")) $("fx-download").onclick = async () => {
 
 document.addEventListener("keydown", (event) => {
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-  if (event.key.toLowerCase() !== "z") return;
-  if (nativeTextUndoTarget(event.target)) return;
+  const key = event.key.toLowerCase();
+  if (key === "z") {
+    if (nativeTextUndoTarget(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    performUndo();
+    return;
+  }
+  if (key === "a") {
+    if (fileClipboardBlocked(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    const items = showingSetPads() ? selectableGroups().flat() : visibleItems().map((item) => item.path);
+    state.selectedPad = null;
+    state.selected = new Set(items);
+    state.rangeAnchor = items.at(-1) || null;
+    highlightSelection();
+    return;
+  }
+  if (key !== "c" && key !== "x" && key !== "v") return;
+  if (fileClipboardBlocked(event.target)) return;
+  if (event.repeat) return;
+  if (key === "c") {
+    if (!copySelection("copy")) return;
+  } else if (key === "x") {
+    if (!copySelection("cut")) return;
+  } else if (!fileClipboard?.items?.length) {
+    return;
+  } else {
+    pasteClipboard();
+  }
   event.preventDefault();
   event.stopPropagation();
-  if (event.repeat) return;
-  performUndo();
 }, true);
 
 window.addEventListener("pointerup", (event) => {
@@ -5936,10 +6415,13 @@ window.addEventListener("blur", () => {
   if (kitType() === "gate") stopKitPlayback();
 });
 
-document.querySelector(".tab").classList.add("active");
+document.querySelector(".tab")?.classList.add("active");
 if ($("storage")) {
-  $("storage").addEventListener("click", () => refreshStorage());
-  $("storage").title = "Click to refresh storage";
+  $("storage").addEventListener("click", () => openStorageDetail());
+  $("storage").title = "Click for a storage breakdown";
+}
+if ($("storage-detail-close")) {
+  $("storage-detail-close").onclick = () => $("storage-detail").close();
 }
 loadStatus().then(() => {
   load();

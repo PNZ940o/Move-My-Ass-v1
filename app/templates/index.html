@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Move My Ass v1</title>
 <link rel="icon" href="/static/logo.png?v=glitch3">
-<link rel="stylesheet" href="/static/style.css?v=liveui73">
+<link rel="stylesheet" href="/static/style.css?v=liveui84">
 </head>
 <body>
 <header class="topbar">
@@ -91,6 +91,33 @@
     <p class="hint">This is the LED colour on the 32-pad grid.</p>
     <menu>
       <button type="button" id="color-cancel" class="dismiss">Cancel</button>
+    </menu>
+  </div>
+</dialog>
+
+<dialog id="storage-detail">
+  <div class="studio-top">
+    <div class="studio-title">
+      <span class="kicker">Device</span>
+      <h2>Storage</h2>
+    </div>
+  </div>
+  <p class="storage-detail-summary" id="storage-detail-summary">Measuring storage…</p>
+  <div class="storage-detail-bar" id="storage-detail-bar"></div>
+  <table class="storage-detail-list">
+    <thead>
+      <tr>
+        <th>Library</th>
+        <th class="n">Items</th>
+        <th class="n">On disk</th>
+      </tr>
+    </thead>
+    <tbody id="storage-detail-rows"></tbody>
+  </table>
+  <div class="studio-foot">
+    <p class="hint" id="storage-detail-hint">These numbers come from the folders on Move.</p>
+    <menu>
+      <button type="button" id="storage-detail-close" class="dismiss">Close</button>
     </menu>
   </div>
 </dialog>
@@ -303,6 +330,6 @@
 </footer>
 
 <div id="toasts"></div>
-<script src="/static/app.js?v=liveui66"></script>
+<script src="/static/app.js?v=liveui84"></script>
 </body>
 </html>

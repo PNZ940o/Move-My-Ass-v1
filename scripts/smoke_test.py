@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 import uuid
 import zipfile
+from urllib.parse import quote
 
 BASE = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8000")
 failures: list[str] = []
@@ -182,11 +183,87 @@ result = json.loads(call("POST", "/api/move", {"kind": "samples", "items": ["Smo
 check("moving a folder into itself is refused",
       result["moved"] == [] and result["failed"], result)
 
+result = json.loads(call("POST", "/api/move", {
+    "kind": "samples", "items": ["SmokeTest/renamed.wav"], "dest": "SmokeTest/renamed.wav",
+})[1])
+check("move dest that is a file uses its folder",
+      result["moved"] == ["SmokeTest/renamed.wav"] and result["failed"] == [], result)
+
+# copy / paste duplicates
+result = json.loads(call("POST", "/api/copy", {
+    "kind": "samples", "items": ["SmokeTest/renamed.wav"], "dest": "SmokeTest",
+})[1])
+check("copy in the same folder gets a (copy) name",
+      result["copied"] and result["copied"][0]["path"] == "SmokeTest/renamed (copy).wav", result)
+_, raw = call("GET", "/api/list?kind=samples&path=SmokeTest")
+copied_names = [i["name"] for i in json.loads(raw)["items"]]
+check("copy left the original in place", "renamed.wav" in copied_names, copied_names)
+check("copy created the duplicate", "renamed (copy).wav" in copied_names, copied_names)
+
+result = json.loads(call("POST", "/api/copy", {
+    "kind": "samples", "items": ["SmokeTest/renamed.wav"], "dest": "SmokeTest",
+})[1])
+check("second copy is numbered",
+      result["copied"] and result["copied"][0]["path"] == "SmokeTest/renamed (copy 2).wav", result)
+
+result = json.loads(call("POST", "/api/copy", {
+    "kind": "samples", "items": ["SmokeTest/renamed.wav"], "dest": "SmokeTest/made",
+})[1])
+check("copy into another folder keeps the original name",
+      result["copied"] and result["copied"][0]["path"] == "SmokeTest/made/renamed.wav", result)
+call("POST", "/api/delete", {"kind": "samples", "items": ["SmokeTest/made/renamed.wav"]})
+
+result = json.loads(call("POST", "/api/copy", {
+    "kind": "samples", "items": ["SmokeTest/nested"], "dest": "SmokeTest",
+})[1])
+check("copying a folder uses (copy)",
+      result["copied"] and result["copied"][0]["path"] == "SmokeTest/nested (copy)", result)
+_, raw = call("GET", "/api/list?kind=samples&path=" + quote("SmokeTest/nested (copy)"))
+check("copied folder keeps its contents",
+      [i["name"] for i in json.loads(raw)["items"]] == ["two.wav"], raw)
+
+result = json.loads(call("POST", "/api/copy", {
+    "kind": "samples", "items": ["SmokeTest/renamed.wav"], "dest": "SmokeTest/renamed.wav",
+})[1])
+check("copy dest that is a file pastes in its folder",
+      result["copied"] and result["copied"][0]["path"].startswith("SmokeTest/renamed (copy"), result)
+
 try:
-    call("POST", "/api/move", {"kind": "samples", "items": ["SmokeTest/renamed.wav"], "dest": "SmokeTest/renamed.wav"})
-    check("move onto a file is refused", False, "request succeeded")
+    call("POST", "/api/copy", {"kind": "samples", "items": ["SmokeTest/renamed.wav"], "dest": "SmokeTest/no-such-folder"})
+    check("copy into a missing folder is refused", False, "request succeeded")
 except urllib.error.HTTPError as exc:
-    check("move onto a file is refused", exc.code == 400, exc.code)
+    check("copy into a missing folder is refused", exc.code == 400, exc.code)
+
+try:
+    call("POST", "/api/copy", {"kind": "factory", "items": ["x"], "dest": ""})
+    check("copy into factory is refused", False, "request succeeded")
+except urllib.error.HTTPError as exc:
+    check("copy into factory is refused", exc.code == 403, exc.code)
+
+result = json.loads(call("POST", "/api/copy", {
+    "kind": "recordings", "source_kind": "samples",
+    "items": ["SmokeTest/renamed.wav"], "dest": "",
+})[1])
+check("copy from samples into recordings",
+      result["copied"] and result["copied"][0]["path"] == "renamed.wav", result)
+call("POST", "/api/delete", {"kind": "recordings", "items": ["renamed.wav"]})
+
+result = json.loads(call("POST", "/api/copy", {
+    "kind": "samples", "source_kind": "recordings",
+    "items": ["Set 1 Rec 1.wav"], "dest": "SmokeTest",
+})[1])
+check("copy from recordings into samples",
+      result["copied"] and result["copied"][0]["path"] == "SmokeTest/Set 1 Rec 1.wav", result)
+call("POST", "/api/delete", {"kind": "samples", "items": ["SmokeTest/Set 1 Rec 1.wav"]})
+
+try:
+    call("POST", "/api/copy", {
+        "kind": "presets", "source_kind": "samples",
+        "items": ["SmokeTest/renamed.wav"], "dest": "",
+    })
+    check("copy from samples into presets is refused", False, "request succeeded")
+except urllib.error.HTTPError as exc:
+    check("copy from samples into presets is refused", exc.code == 400, exc.code)
 
 # rename must refuse a path
 try:
