@@ -5,9 +5,10 @@ handles badly: bulk sample uploads, building drum kits, browsing what's actually
 on the device, preset management, and backups.
 
 **This is v1** (shippable): one instrument plus two Move effect slots, no
-instrument/effect editors. Open it at **http://movemyass.local:8000**. The beta
-fork with those editors is `D:\Programming\Move Manager` at
-**http://movemyass.beta:8001**.
+instrument/effect editors. Open it at **http://movemyass.local:8000**. It is the
+only version published to GitHub, at https://github.com/boemiurgo/Move-My-Ass-v1.
+The v0 archive still has those editors and lives locally at
+`D:\Programming\Move Manager\v0` on **http://movemyass.beta:8001**.
 
 It runs as a small web app **on your PC** and talks to the Move over SFTP. Nothing
 is installed on the device and no firmware is modified — we only read and write
@@ -15,7 +16,7 @@ files in your own user library.
 
 ## Where copies live
 
-- **Working copy:** `D:\Programming\Move Manager v1` (this folder)
+- **Working copy:** `D:\Programming\Move Manager\v1` (this folder)
 - **Desktop copy:** `%USERPROFILE%\Desktop\Move My Ass` — source only, no `.venv`
   and no mock device files. To run it from the Desktop:
 
@@ -27,17 +28,15 @@ python -m venv .venv
 .\run.ps1 -Mock
 ```
 
-- **GitHub:** create a new repository named **Move-My-Ass** (empty, no README),
-  then from the working copy:
+- **GitHub:** https://github.com/boemiurgo/Move-My-Ass-v1 (private), which holds
+  the `v1` branch and nothing else. To publish new work:
 
 ```powershell
-cd "D:\Programming\Move Manager"
-git remote add origin https://github.com/<your-username>/Move-My-Ass.git
-git push -u origin main
+cd "D:\Programming\Move Manager\v1"
+git push origin v1
 ```
 
-Replace `<your-username>` with your GitHub account. SSH keys, `.venv`, and
-`mock-move/` are not included.
+SSH keys, `.venv`, and `mock-move/` are not included.
 
 ## Status
 

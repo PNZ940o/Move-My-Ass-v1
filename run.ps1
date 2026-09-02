@@ -36,7 +36,7 @@ Ensure-AppHost | Out-Null
 
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
-    $sibling = Join-Path (Split-Path $PSScriptRoot -Parent) "Move Manager\.venv\Scripts\python.exe"
+    $sibling = Join-Path (Split-Path $PSScriptRoot -Parent) "v0\.venv\Scripts\python.exe"
     if (Test-Path $sibling) { $python = $sibling }
 }
 if (-not (Test-Path $python)) {
