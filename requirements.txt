@@ -1,5 +1,11 @@
-fastapi>=0.115
-uvicorn>=0.32
-paramiko>=3.5
-python-multipart>=0.0.20
-Jinja2>=3.1
+# Upper bounds are deliberate. These are the versions this was tested against, so
+# someone installing months from now gets the same behaviour. Widen them on
+# purpose, not by accident.
+fastapi>=0.115,<1
+uvicorn>=0.32,<1
+# paramiko 5 dropped SHA-1 host keys and DSA. Move's firmware may only offer the
+# legacy ssh-rsa algorithm, in which case 5.x refuses to connect at all. Stay
+# below it until that can be checked against real hardware.
+paramiko>=3.5,<5
+python-multipart>=0.0.20,<0.1
+Jinja2>=3.1,<4

@@ -17,6 +17,13 @@ class MoveConnectionError(RuntimeError):
     pass
 
 
+def _target_key(config: Settings) -> tuple:
+    """Identifies the device an undo history belongs to."""
+    if config.backend != "sftp":
+        return ("mock", str(config.mock_root))
+    return ("sftp", config.host, config.port, config.user)
+
+
 class MoveSession:
     def __init__(self, config: Settings) -> None:
         self.config = config
@@ -24,12 +31,23 @@ class MoveSession:
         self._lock = threading.Lock()
         self._last_error: str | None = None
         self.undo = UndoStack()
+        self._undo_target = _target_key(config)
 
     def backend(self) -> MoveBackend:
         with self._lock:
+            switched = False
             if self._backend is None:
                 self._backend = self._connect()
-            return self._backend
+                target = _target_key(self.config)
+                switched = target != self._undo_target
+                self._undo_target = target
+            backend = self._backend
+        # Undo snapshots hold files copied off one particular device, so they mean
+        # nothing against a different one. Drop them only once the new device has
+        # actually answered — a mistyped host should not cost the history.
+        if switched:
+            self.undo.clear()
+        return backend
 
     def _ensure_mock(self) -> None:
         drums = self.config.mock_root / "data" / "UserData" / "UserLibrary" / "Samples" / "Drums"
@@ -80,12 +98,19 @@ class MoveSession:
         with self._lock:
             self.config = replace(self.config, **changes)  # type: ignore[arg-type]
             self._close_locked()
-        self.undo.clear()
 
     def disconnect(self) -> None:
         with self._lock:
             self._close_locked()
         self.undo.clear()
+
+    def invalidate(self) -> None:
+        """Throw away a connection that has died, keeping the undo history.
+
+        The next request dials again by itself.
+        """
+        with self._lock:
+            self._close_locked()
 
     def _close_locked(self) -> None:
         if self._backend is not None:

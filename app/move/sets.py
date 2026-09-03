@@ -25,6 +25,7 @@ import json
 import posixpath
 import re
 import shlex
+import threading
 import uuid as uuidlib
 import zipfile
 from dataclasses import dataclass
@@ -33,6 +34,11 @@ from urllib.parse import quote
 from . import paths, storage
 from .backend import MoveBackend
 from .pad_colors import PAD_COLORS, hex_color
+
+# Claiming a pad means reading every set's index and then writing one, so two
+# requests arriving together could both pick the same free pad. Only the claim is
+# serialised; the copying and unpacking either side of it still overlap.
+_pad_lock = threading.Lock()
 
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -137,10 +143,15 @@ def _parse_dump(text: str) -> dict[str, SetMeta]:
 
 def _inner_name(backend: MoveBackend, uuid: str) -> str:
     absolute = posixpath.join(paths.SETS, uuid)
-    for entry in backend.list_dir(absolute):
-        if entry.is_dir and not entry.name.startswith("."):
-            return entry.name
-    return uuid
+    # Sorted, because directory order differs between the mock and SFTP. A set
+    # holding more than one folder would otherwise show a different display name
+    # depending on which backend read it.
+    named = sorted(
+        entry.name
+        for entry in backend.list_dir(absolute)
+        if entry.is_dir and not entry.name.startswith(".")
+    )
+    return named[0] if named else uuid
 
 
 def _read_sidecar(backend: MoveBackend, uuid: str) -> dict[str, str]:
@@ -244,7 +255,7 @@ def set_color(backend: MoveBackend, uuid: str, color_id: int) -> int:
 
 def rename_set(backend: MoveBackend, uuid: str, new_name: str, refresh: bool = True) -> str:
     """Rename the inner display folder and rewrite Song.abl sample URIs."""
-    if "/" in new_name or new_name in {"", ".", ".."}:
+    if set(new_name) & {"/", "\\"} or new_name in {"", ".", ".."}:
         raise ValueError("invalid name")
 
     old_name = _inner_name(backend, uuid)
@@ -263,9 +274,15 @@ def rename_set(backend: MoveBackend, uuid: str, new_name: str, refresh: bool = T
     song = posixpath.join(dst, "Song.abl")
     if backend.exists(song) and not backend.is_dir(song):
         text = backend.read_file(song).decode("utf-8", "replace")
-        updated = text.replace(quote(old_name), quote(new_name))
-        if old_name != quote(old_name):
-            updated = updated.replace(old_name, new_name)
+        # Only this set's own path prefix gets rewritten. A blanket replace of the
+        # old name would also hit any sample whose filename happens to contain it,
+        # so renaming a set called "Kick" would corrupt every Kick.wav URI in it.
+        prefix = f"Sets/{uuid}/"
+        updated = text.replace(
+            f"{prefix}{quote(old_name)}/", f"{prefix}{quote(new_name)}/"
+        )
+        if quote(old_name) != old_name:
+            updated = updated.replace(f"{prefix}{old_name}/", f"{prefix}{new_name}/")
         if updated != text:
             backend.write_file(song, updated.encode("utf-8"))
 
@@ -495,21 +512,22 @@ def copy_to_pad(backend: MoveBackend, uuid: str, pad_number: int) -> dict:
 
     new_uuid, color_id = _duplicate_set(backend, uuid)
     try:
-        if pad_index in _occupied_pads(collect(backend), exclude=new_uuid):
-            raise FileExistsError(f"pad {pad_number} is already used")
-        _commit_set(backend, new_uuid, pad_index, color_id)
-        if _read_pad_index(backend, new_uuid) != pad_index:
-            raise RuntimeError(f"copy did not land on pad {pad_number}")
-        others = collect(backend)
-        holders = [
-            meta.name
-            for other, meta in others.items()
-            if other != new_uuid and meta.pad_index == pad_index
-        ]
-        if holders:
-            raise RuntimeError(
-                f"pad {pad_number} already belongs to {holders[0]} — copy was not left on the grid"
-            )
+        with _pad_lock:
+            if pad_index in _occupied_pads(collect(backend), exclude=new_uuid):
+                raise FileExistsError(f"pad {pad_number} is already used")
+            _commit_set(backend, new_uuid, pad_index, color_id)
+            if _read_pad_index(backend, new_uuid) != pad_index:
+                raise RuntimeError(f"copy did not land on pad {pad_number}")
+            others = collect(backend)
+            holders = [
+                meta.name
+                for other, meta in others.items()
+                if other != new_uuid and meta.pad_index == pad_index
+            ]
+            if holders:
+                raise RuntimeError(
+                    f"pad {pad_number} already belongs to {holders[0]} — copy was not left on the grid"
+                )
     except Exception:
         _remove_copy(backend, new_uuid)
         raise
@@ -729,25 +747,26 @@ def _place_imported(
     pad_number: int | None,
     off_grid: bool,
 ) -> int | None:
-    meta_map = collect(backend)
     if off_grid:
         _commit_set(backend, uuid, None, color_id)
         if _read_pad_index(backend, uuid) is not None:
             raise RuntimeError("imported set still has a pad index")
         return None
-    if pad_number is None:
-        pad_number = _first_empty_pad(meta_map)
+    with _pad_lock:
+        meta_map = collect(backend)
         if pad_number is None:
-            _commit_set(backend, uuid, None, color_id)
-            return None
-    if not isinstance(pad_number, int) or pad_number < 1 or pad_number > 32:
-        raise ValueError("pad must be 1–32")
-    pad_index = pad_number - 1
-    if pad_index in _occupied_pads(meta_map, exclude=uuid):
-        raise FileExistsError(f"pad {pad_number} is already used")
-    _commit_set(backend, uuid, pad_index, color_id)
-    if _read_pad_index(backend, uuid) != pad_index:
-        raise RuntimeError(f"import did not land on pad {pad_number}")
+            pad_number = _first_empty_pad(meta_map)
+            if pad_number is None:
+                _commit_set(backend, uuid, None, color_id)
+                return None
+        if not isinstance(pad_number, int) or pad_number < 1 or pad_number > 32:
+            raise ValueError("pad must be 1–32")
+        pad_index = pad_number - 1
+        if pad_index in _occupied_pads(meta_map, exclude=uuid):
+            raise FileExistsError(f"pad {pad_number} is already used")
+        _commit_set(backend, uuid, pad_index, color_id)
+        if _read_pad_index(backend, uuid) != pad_index:
+            raise RuntimeError(f"import did not land on pad {pad_number}")
     return pad_number
 
 

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8000")
 PRESETS = Path("mock-move/data/UserData/UserLibrary/Track Presets")
 SAMPLES = Path("mock-move/data/UserData/UserLibrary/Samples")
 failures: list[str] = []

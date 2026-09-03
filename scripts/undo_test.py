@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.move.backend import LocalBackend  # noqa: E402
 from app.move import undo  # noqa: E402
 
-BASE = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8001")
+BASE = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8000")
 failures: list[str] = []
 
 
@@ -72,8 +72,10 @@ status = get("/api/status")
 if status["mode"] != "mock":
     sys.exit(f"refusing to run against a real device (mode={status['mode']})")
 
-while get("/api/undo").get("can_undo"):
-    post("/api/undo", {})
+# Earlier suites leave entries behind, and some of them edit the mock directly
+# rather than through the API, which undo can never replay. Dropping the backend
+# clears the stack outright and gives this suite a known starting point.
+post("/api/disconnect", {})
 
 empty = post_expect_error("/api/undo")
 check("empty stack is nothing to undo", empty is not None and "nothing to undo" in str(empty).lower(), empty)

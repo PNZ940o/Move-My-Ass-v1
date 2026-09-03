@@ -19,6 +19,21 @@ import paramiko
 
 from . import paths
 
+# OpenSSH's sftp-server keeps roughly 64 requests in flight. Prefetching a large
+# sample with no cap queues every chunk at once, which has been seen to stall the
+# channel outright, so keep the queue comfortably under that.
+MAX_PREFETCH_REQUESTS = 32
+
+# Raised when the Move sleeps, reboots, or leaves the network mid-operation. These
+# mean "the connection died", not "the request was wrong", so they earn a 503 and a
+# fresh dial rather than a 500.
+TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    paramiko.SSHException,
+    EOFError,
+    ConnectionError,
+    TimeoutError,
+)
+
 
 def _known_hosts_path() -> Path:
     return Path.home() / ".ssh" / "known_hosts"
@@ -263,7 +278,7 @@ class SftpBackend(MoveBackend):
 
     def read_file(self, path: str) -> bytes:
         with self._sftp.open(path, "rb") as handle:
-            handle.prefetch()
+            handle.prefetch(max_concurrent_requests=MAX_PREFETCH_REQUESTS)
             return handle.read()
 
     def write_file(self, path: str, data: bytes) -> None:
@@ -327,7 +342,7 @@ class SftpBackend(MoveBackend):
             handle.seek(offset)
             # prefetch() queues reads from the current position, so seek first or
             # it pulls the head of the file down for nothing.
-            handle.prefetch(offset + length)
+            handle.prefetch(offset + length, max_concurrent_requests=MAX_PREFETCH_REQUESTS)
             return handle.read(length)
 
     def run(self, command: str, timeout: float = 20.0) -> CommandResult:

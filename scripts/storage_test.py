@@ -64,7 +64,7 @@ check("libraries lists presets", "presets" in by_lib, by_lib)
 check("libraries lists effects", "effects" in by_lib, by_lib)
 check("libraries lists core library", "factory" in by_lib and by_lib["factory"]["label"] == "Core Library", by_lib)
 
-base = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8001")
+base = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8000")
 try:
     with urllib.request.urlopen(f"{base}/api/status", timeout=5) as response:
         status = json.loads(response.read())

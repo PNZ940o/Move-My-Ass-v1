@@ -160,15 +160,24 @@ def restore_tree(backend: MoveBackend, dest: Path, path: str) -> None:
 
 
 def apply_entry(backend: MoveBackend, entry: UndoEntry) -> None:
-    errors: list[str] = []
-    for step in reversed(entry.steps):
+    """Play an entry's inverse steps, newest first.
+
+    Stops at the first failure and leaves the outstanding steps on the entry, so
+    a retry resumes instead of replaying work that already succeeded. Only a
+    clean run throws away the cached bytes, because they are the sole copy of
+    anything the original operation overwrote.
+    """
+    pending = list(reversed(entry.steps))
+    while pending:
+        step = pending[0]
         try:
             _apply_step(backend, entry.cache, step)
         except Exception as exc:
-            errors.append(f"{step.get('op')} {step.get('path', '')}: {exc}".strip())
+            entry.steps = list(reversed(pending))
+            raise UndoError(f"{step.get('op')} {step.get('path', '')}: {exc}".strip()) from exc
+        pending.pop(0)
+    entry.steps = []
     _forget(entry)
-    if errors:
-        raise UndoError("; ".join(errors[:4]))
 
 
 def apply(backend: MoveBackend, stack: UndoStack) -> str:
@@ -180,6 +189,8 @@ def apply(backend: MoveBackend, stack: UndoStack) -> str:
     try:
         apply_entry(backend, entry)
     except UndoError:
+        # Back on the stack with its cache, so the cause can be fixed and retried.
+        stack.push(entry)
         raise
     finally:
         if refresh:

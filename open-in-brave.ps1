@@ -45,7 +45,7 @@ if (-not $brave) {
 
 if (-not (AppIsUp)) {
   Write-Host "Starting Move My Ass..." -ForegroundColor Cyan
-  Start-Process powershell -WorkingDirectory $root -ArgumentList "-NoExit", "-File", "`"$root\run.ps1`""
+  Start-Process powershell -WorkingDirectory $root -ArgumentList "-NoExit", "-File", "`"$root\run.ps1`"", "-NoBrowser"
   $deadline = (Get-Date).AddSeconds(20)
   while (-not (AppIsUp) -and (Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 400

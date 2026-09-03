@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import PROJECT_ROOT
 from .move import effects, kits, library, paths, presets, sets, storage, undo
-from .move.backend import MoveBackend
+from .move.backend import TRANSPORT_ERRORS, MoveBackend
 from .move.pad_colors import PAD_COLORS, hex_color
 from .move.paths import UnsafePath
 from .move.session import MoveConnectionError, session
@@ -44,6 +44,18 @@ def commit_undo(builder: undo.Builder) -> None:
 @app.exception_handler(UnsafePath)
 async def unsafe_path_handler(request: Request, exc: UnsafePath) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+async def transport_failed(request: Request, exc: Exception) -> JSONResponse:
+    session.invalidate()
+    return JSONResponse(
+        status_code=503,
+        content={"detail": f"Lost the connection to Move ({exc}). Try again to reconnect."},
+    )
+
+
+for _transport_error in TRANSPORT_ERRORS:
+    app.add_exception_handler(_transport_error, transport_failed)
 
 
 @app.get("/")
@@ -80,7 +92,7 @@ class ConnectRequest(BaseModel):
 
 
 @app.post("/api/connect")
-async def connect(body: ConnectRequest):
+def connect(body: ConnectRequest):
     session.configure(
         backend=body.backend, host=body.host, user=body.user, key_path=body.key_path
     )
@@ -89,17 +101,32 @@ async def connect(body: ConnectRequest):
 
 
 @app.post("/api/disconnect")
-async def disconnect():
+def disconnect():
     session.disconnect()
     return session.status()
 
 
 @app.get("/api/list")
-async def list_dir(kind: str, path: str = ""):
+def list_dir(kind: str, path: str = ""):
     try:
         return library.listing(get_backend(), kind, path)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+def _store_upload(
+    backend: MoveBackend,
+    builder: undo.Builder,
+    kind: str,
+    dest_folder: str,
+    relative: str,
+    data: bytes,
+) -> None:
+    """The blocking half of one upload: the existence check, the undo snapshot, the write."""
+    sets.guard_write(kind, posixpath.join(dest_folder, relative))
+    target = paths.resolve(kind, posixpath.join(dest_folder, relative))
+    builder.will_overwrite(target)
+    backend.write_file(target, data)
 
 
 @app.post("/api/upload")
@@ -107,10 +134,11 @@ async def upload(
     kind: str = Form(...),
     dest: str = Form(""),
     files: list[UploadFile] = File(...),
-    relpaths: list[str] = Form(default=[]),
+    relpaths: list[str] | None = Form(default=None),
 ):
     require_writable(kind)
-    backend = get_backend()
+    relpaths = relpaths or []
+    backend = await run_in_threadpool(get_backend)
     written, failed = [], []
     dest_folder = (dest or "").replace("\\", "/").strip("/")
     label = "upload" if len(files) != 1 else posixpath.basename(
@@ -124,10 +152,10 @@ async def upload(
         relative = relative.replace("\\", "/").lstrip("/")
         mark = builder.checkpoint()
         try:
-            sets.guard_write(kind, posixpath.join(dest_folder, relative))
-            target = paths.resolve(kind, posixpath.join(dest_folder, relative))
-            builder.will_overwrite(target)
-            backend.write_file(target, await upload_file.read())
+            data = await upload_file.read()
+            await run_in_threadpool(
+                _store_upload, backend, builder, kind, dest_folder, relative, data
+            )
             written.append(relative)
         except Exception as exc:
             builder.revert_to(mark)
@@ -136,6 +164,8 @@ async def upload(
             await upload_file.close()
 
     commit_undo(builder)
+    if written:
+        await run_in_threadpool(backend.refresh_library)
     return {"written": written, "failed": failed, "count": len(written)}
 
 
@@ -145,7 +175,7 @@ class PathRequest(BaseModel):
 
 
 @app.post("/api/mkdir")
-async def mkdir(body: PathRequest):
+def mkdir(body: PathRequest):
     require_writable(body.kind)
     try:
         sets.guard_write(body.kind, body.path)
@@ -161,6 +191,7 @@ async def mkdir(body: PathRequest):
         builder = undo.Builder(backend, f"New folder {posixpath.basename(target)}")
         builder.created(target)
         commit_undo(builder)
+        backend.refresh_library()
     return {"ok": True, "path": target}
 
 
@@ -170,7 +201,7 @@ class DeleteRequest(BaseModel):
 
 
 @app.post("/api/delete")
-async def delete(body: DeleteRequest):
+def delete(body: DeleteRequest):
     require_writable(body.kind)
     backend = get_backend()
     removed, failed = [], []
@@ -191,6 +222,8 @@ async def delete(body: DeleteRequest):
             builder.revert_to(mark)
             failed.append({"name": item, "error": f"{type(exc).__name__}: {exc}"})
     commit_undo(builder)
+    if removed:
+        backend.refresh_library()
     return {"removed": removed, "failed": failed}
 
 
@@ -214,9 +247,9 @@ def _keep_suffix(original: str, new_name: str) -> str:
 
 
 @app.post("/api/rename")
-async def rename(body: RenameRequest):
+def rename(body: RenameRequest):
     require_writable(body.kind)
-    if "/" in body.new_name or body.new_name in {"", ".", ".."}:
+    if set(body.new_name) & {"/", "\\"} or body.new_name in {"", ".", ".."}:
         raise HTTPException(status_code=400, detail="invalid name")
 
     backend = get_backend()
@@ -251,6 +284,7 @@ async def rename(body: RenameRequest):
         builder.will_rename(source, target)
         backend.rename(source, target)
         commit_undo(builder)
+        backend.refresh_library()
     return {"ok": True, "name": name}
 
 
@@ -270,7 +304,7 @@ class SetColorRequest(BaseModel):
 
 
 @app.post("/api/set-color")
-async def change_set_color(body: SetColorRequest):
+def change_set_color(body: SetColorRequest):
     """Set the LED colour on a pad set. Does not move the set on the grid."""
     backend = get_backend()
     meta = sets.collect(backend).get(body.path)
@@ -296,7 +330,7 @@ class CopySetRequest(BaseModel):
 
 
 @app.post("/api/copy-set")
-async def copy_set(body: CopySetRequest):
+def copy_set(body: CopySetRequest):
     """Duplicate a set onto an empty pad, or off the grid when pad is omitted."""
     backend = get_backend()
     try:
@@ -323,12 +357,13 @@ async def copy_set(body: CopySetRequest):
 @app.post("/api/import-set")
 async def import_set(
     files: list[UploadFile] = File(...),
-    relpaths: list[str] = Form(default=[]),
+    relpaths: list[str] | None = Form(default=None),
     pad: int | None = Form(None),
     off_grid: bool = Form(False),
 ):
     """Install a PC-saved .ablbundle / .zip / .abl / Song.abl folder as a real set."""
-    backend = get_backend()
+    relpaths = relpaths or []
+    backend = await run_in_threadpool(get_backend)
     uploads: list[tuple[str, bytes]] = []
     try:
         for index, upload_file in enumerate(files):
@@ -376,7 +411,7 @@ class MoveRequest(BaseModel):
 
 
 @app.post("/api/move")
-async def move_items(body: MoveRequest):
+def move_items(body: MoveRequest):
     """Move files or folders into a destination folder in the same section."""
     require_writable(body.kind)
     if not body.items:
@@ -440,7 +475,7 @@ class CopyRequest(BaseModel):
 
 
 @app.post("/api/copy")
-async def copy_items(body: CopyRequest):
+def copy_items(body: CopyRequest):
     """Duplicate files or folders into a destination folder.
 
     `source_kind` defaults to `kind`. Factory items may be pasted into Samples.
@@ -477,7 +512,7 @@ class CopyToSamplesRequest(BaseModel):
 
 
 @app.post("/api/copy-to-samples")
-async def copy_to_samples(body: CopyToSamplesRequest):
+def copy_to_samples(body: CopyToSamplesRequest):
     """Copy factory items into Samples/Factory without touching CoreLibrary."""
     try:
         copied, failed = library.copy_into_samples(
@@ -508,7 +543,7 @@ class MoveToSamplesRequest(BaseModel):
 
 
 @app.post("/api/move-to-samples")
-async def move_to_samples(body: MoveToSamplesRequest):
+def move_to_samples(body: MoveToSamplesRequest):
     """Move Recordings into Samples so they can be sliced and used in kits."""
     try:
         moved, failed = library.move_into_samples(
@@ -535,7 +570,7 @@ async def move_to_samples(body: MoveToSamplesRequest):
 
 
 @app.get("/api/download")
-async def download(kind: str, path: str):
+def download(kind: str, path: str):
     backend = get_backend()
     absolute = paths.resolve(kind, path)
     name = posixpath.basename(absolute) or kind
@@ -563,7 +598,7 @@ class DownloadManyRequest(BaseModel):
 
 
 @app.post("/api/download-zip")
-async def download_many(body: DownloadManyRequest):
+def download_many(body: DownloadManyRequest):
     backend = get_backend()
     if not body.items:
         raise HTTPException(status_code=400, detail="nothing selected")
@@ -621,7 +656,7 @@ _RANGE = re.compile(r"bytes=(\d*)-(\d*)")
 
 
 @app.get("/api/preview")
-async def preview(request: Request, kind: str, path: str):
+def preview(request: Request, kind: str, path: str):
     """Stream an audio file to a browser <audio>, honouring Range requests."""
     backend = get_backend()
     absolute = paths.resolve(kind, path)
@@ -640,6 +675,10 @@ async def preview(request: Request, kind: str, path: str):
         return Response(backend.read_file(absolute), media_type=media_type, headers=headers)
 
     first, last = match.group(1), match.group(2)
+    if not first and not last:
+        # "bytes=-" carries no range at all, so the spec says ignore the header.
+        return Response(backend.read_file(absolute), media_type=media_type, headers=headers)
+
     if first:
         start = int(first)
         end = int(last) if last else size - 1
@@ -675,10 +714,14 @@ class KitPadPlanRequest(BaseModel):
 
 
 @app.post("/api/kit/plan-pads")
-async def kit_plan_pads(body: KitPadPlanRequest):
+def kit_plan_pads(body: KitPadPlanRequest):
     backend = get_backend()
     section = _kit_section(body.section)
     absolute = paths.resolve(section, body.folder)
+    if not backend.is_dir(absolute):
+        # Without this the listing comes back empty and the user gets a plausible
+        # looking plan of 16 blank pads instead of being told the folder is gone.
+        raise HTTPException(status_code=404, detail=f"folder not found: {body.folder or '/'}")
     audio = sorted(
         (
             entry.name
@@ -713,7 +756,7 @@ class KitSlicePlanRequest(BaseModel):
 
 
 @app.post("/api/kit/plan-slices")
-async def kit_plan_slices(body: KitSlicePlanRequest):
+def kit_plan_slices(body: KitSlicePlanRequest):
     backend = get_backend()
     data = backend.read_file(paths.resolve(_kit_section(body.section), body.sample))
     try:
@@ -858,15 +901,32 @@ def _kit_preset(name: str, pads: list[kits.Pad], body: KitBuildRequest, backend)
 
 
 @app.post("/api/kit/build")
-async def kit_build(body: KitBuildRequest):
+def kit_build(body: KitBuildRequest):
     backend = get_backend()
     name = _safe_filename(body.name)
     section = _kit_section(body.section)
     sources = _pad_sources(body)
 
     if body.output == "bundle":
+        # A bundle flattens every sample into one Samples/ folder, so two pads
+        # loaded from Drums/kick.wav and Loops/kick.wav would collide on a single
+        # zip entry and one of them would play the wrong file. Give each distinct
+        # source its own name inside the bundle.
+        bundle_names: dict[str, str] = {}
+        for path, _, _ in sources:
+            if not path or path in bundle_names:
+                continue
+            base = posixpath.basename(path)
+            candidate = base
+            attempt = 2
+            while candidate in bundle_names.values():
+                stem, dot, extension = base.rpartition(".")
+                candidate = f"{stem} {attempt}{dot}{extension}" if dot else f"{base} {attempt}"
+                attempt += 1
+            bundle_names[path] = candidate
+
         pads = [
-            kits.Pad(kits.bundle_uri(path), start, length, posixpath.basename(path))
+            kits.Pad(kits.bundle_uri(bundle_names[path]), start, length, bundle_names[path])
             if path
             else kits.Pad()
             for path, start, length in sources
@@ -876,9 +936,9 @@ async def kit_build(body: KitBuildRequest):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("Preset.ablpreset", json.dumps(preset, indent=2))
-            for path in {p for p, _, _ in sources if p}:
+            for path, filename in bundle_names.items():
                 archive.writestr(
-                    f"Samples/{posixpath.basename(path)}",
+                    f"Samples/{filename}",
                     backend.read_file(paths.resolve(section, path)),
                 )
         return Response(
@@ -927,7 +987,7 @@ async def effect_catalog():
 
 
 @app.get("/api/effects/presets")
-async def effect_presets():
+def effect_presets():
     return {"presets": effects.list_presets(get_backend())}
 
 
@@ -987,17 +1047,17 @@ def _loaded_preset(loaded: dict) -> dict:
 
 
 @app.get("/api/presets/instruments")
-async def preset_instruments():
+def preset_instruments():
     return {"instruments": presets.list_instruments(get_backend())}
 
 
 @app.get("/api/presets/samples")
-async def preset_samples():
+def preset_samples():
     return {"samples": presets.list_samples(get_backend())}
 
 
 @app.get("/api/presets/load")
-async def preset_load(source: str, path: str):
+def preset_load(source: str, path: str):
     try:
         loaded = presets.load_instrument(get_backend(), source, path)
     except (presets.PresetError, UnsafePath) as exc:
@@ -1019,7 +1079,7 @@ async def preset_parse(body: TrackInstrumentRef):
 
 
 @app.post("/api/presets/build")
-async def preset_build(body: TrackPresetBuildRequest):
+def preset_build(body: TrackPresetBuildRequest):
     name = _safe_filename(body.name)
     backend = get_backend()
     try:
@@ -1082,7 +1142,7 @@ async def undo_status():
 
 
 @app.post("/api/undo")
-async def undo_last():
+def undo_last():
     try:
         label = undo.apply(get_backend(), session.undo)
     except undo.UndoError as exc:
@@ -1091,7 +1151,7 @@ async def undo_last():
 
 
 @app.post("/api/refresh")
-async def refresh():
+def refresh():
     result = get_backend().refresh_library()
     return {
         "ok": result.ok,

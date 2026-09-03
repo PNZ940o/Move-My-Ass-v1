@@ -94,9 +94,11 @@ def copy_into_samples(backend: MoveBackend, kind: str, items: list[str], dest_fo
         raise ValueError("nothing to copy")
 
     dest_folder = (dest_folder or "Factory").replace("\\", "/").strip("/")
-    if not dest_folder or ".." in dest_folder.split("/"):
+    if not dest_folder:
         raise ValueError("invalid destination")
 
+    # resolve() is the traversal check, and it is the same one the per-item
+    # targets below go through.
     dest_root = paths.resolve("samples", dest_folder)
     copied, failed = [], []
     for item in items:
@@ -120,9 +122,11 @@ def move_into_samples(backend: MoveBackend, kind: str, items: list[str], dest_fo
         raise ValueError("nothing to move")
 
     dest_folder = (dest_folder or "Recordings").replace("\\", "/").strip("/")
-    if not dest_folder or ".." in dest_folder.split("/"):
+    if not dest_folder:
         raise ValueError("invalid destination")
 
+    # resolve() is the traversal check, and it is the same one the per-item
+    # targets below go through.
     dest_root = paths.resolve("samples", dest_folder)
     moved, failed = [], []
     for item in items:
@@ -137,8 +141,15 @@ def move_into_samples(backend: MoveBackend, kind: str, items: list[str], dest_fo
             try:
                 backend.rename(source, target)
             except Exception:
+                # Copy-then-delete fallback for backends that cannot rename across
+                # directories. If the delete fails the move did not happen, so drop
+                # the copy rather than leaving the file in both places.
                 _copy_entry(backend, source, target)
-                backend.remove(source)
+                try:
+                    backend.remove(source)
+                except Exception:
+                    backend.remove(target)
+                    raise
             moved.append(item)
         except Exception as exc:
             failed.append({"name": item, "error": str(exc)})
@@ -146,17 +157,40 @@ def move_into_samples(backend: MoveBackend, kind: str, items: list[str], dest_fo
 
 
 def _copy_entry(backend: MoveBackend, source: str, dest: str) -> None:
+    """Copy a file or a whole tree.
+
+    Every destination is checked before the first byte is written. A clash found
+    partway through a deep tree would otherwise abort with the earlier siblings
+    already copied, leaving a half-merged folder that is nobody's idea of a
+    failed copy.
+    """
     if not backend.exists(source):
         raise FileNotFoundError(f"{posixpath.basename(source)} not found")
+    taken = _copy_clashes(backend, source, dest)
+    if taken:
+        raise FileExistsError(f"{posixpath.basename(taken[0])} already exists")
+    _copy_tree(backend, source, dest)
+
+
+def _copy_clashes(backend: MoveBackend, source: str, dest: str) -> list[str]:
+    if not backend.is_dir(source):
+        return [dest] if backend.exists(dest) else []
+    clashes: list[str] = []
+    for entry in backend.list_dir(source):
+        if entry.name.startswith(".") or entry.name in HIDDEN_NAMES:
+            continue
+        clashes.extend(_copy_clashes(backend, entry.path, posixpath.join(dest, entry.name)))
+    return clashes
+
+
+def _copy_tree(backend: MoveBackend, source: str, dest: str) -> None:
     if backend.is_dir(source):
         backend.makedirs(dest)
         for entry in backend.list_dir(source):
             if entry.name.startswith(".") or entry.name in HIDDEN_NAMES:
                 continue
-            _copy_entry(backend, entry.path, posixpath.join(dest, entry.name))
+            _copy_tree(backend, entry.path, posixpath.join(dest, entry.name))
         return
-    if backend.exists(dest):
-        raise FileExistsError(f"{posixpath.basename(dest)} already exists")
     backend.write_file(dest, backend.read_file(source))
 
 

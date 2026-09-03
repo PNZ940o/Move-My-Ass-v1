@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.move import kits  # noqa: E402
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("MOVE_TEST_BASE", "http://127.0.0.1:8000")
 failures: list[str] = []
 
 
