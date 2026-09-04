@@ -10,7 +10,7 @@ and write files in your own user library.
 
 This is the shippable version: file manager, kit builder, preset builder, set
 copy/import. Open it at **http://127.0.0.1:8000**. It is the only version
-published to GitHub, at https://github.com/boemiurgo/Move-My-Ass-v1. The v0
+published to GitHub, at https://github.com/PNZ940o/Move-My-Ass-v1. The v0
 archive still has the instrument/effect editors and lives locally at
 `D:\Programming\Move Manager\v0`.
 
@@ -95,7 +95,7 @@ They do not need Git, Docker, or an Ableton account. They need:
 1. **Python 3.11+** from https://www.python.org/downloads/ (on Windows, tick
    "Add python.exe to PATH").
 2. **This project**, either a zip from GitHub (`Code → Download ZIP`) or a
-   clone of https://github.com/boemiurgo/Move-My-Ass-v1.
+   clone of https://github.com/PNZ940o/Move-My-Ass-v1.
 3. The three commands in [Quickstart](#quickstart).
 
 That is enough to browse and break the mock. To use it with their own Move they
@@ -379,7 +379,7 @@ Checked against a real Move on firmware 1.x, connected over Wi-Fi as `ableton`:
 ## Where copies live
 
 - **Working copy:** `D:\Programming\Move Manager\v1` (this folder)
-- **GitHub:** https://github.com/boemiurgo/Move-My-Ass-v1 (private), which holds
+- **GitHub:** https://github.com/PNZ940o/Move-My-Ass-v1 (public), which holds
   the `v1` branch and nothing else. To publish new work:
 
 ```powershell
